@@ -780,7 +780,7 @@ class NES_TP():
 
         # Train set preparation
         self.train_inputs(x_train)
-        self.train_outputs(None)
+        self.train_outputs()
 
         # Outer Callbacks
         mae_bool = isinstance(T_test_set, (list, tuple))
