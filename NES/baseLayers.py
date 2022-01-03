@@ -136,9 +136,10 @@ class LossesHolder(tf.keras.callbacks.Callback):
         self.logs = {'loss' : [], 'val_loss': []}
         
     def on_epoch_end(self, epoch, logs=None):
-        self.logs['loss'].append(logs['loss'])
-        if logs.get('val_loss') is not None:
-            self.logs['val_loss'].append(logs['val_loss'])
+        for kw, v in logs.items():
+            if self.logs.get(kw) is None:
+                self.logs[kw] = []
+            self.logs[kw].append(v)
 
 
 def EarlyStopping(tolerance):
