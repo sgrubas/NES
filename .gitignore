@@ -6,7 +6,8 @@ bin-release/
 
 # Other files and folders
 .settings/
-.__pycache__/
+/NES/__pycache__/
+NES.egg-info/
 
 
 # Executables

@@ -792,7 +792,7 @@ class NES_TP():
         self.compile(**compile_kw)
 
         if step_epochs is not None:
-        train_kw['epochs'] = step_epochs
+            train_kw['epochs'] = step_epochs
 
         # Progress bar
         steps = np.ceil(max_epochs / train_kw['epochs']).astype(int)

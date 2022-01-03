@@ -12,7 +12,7 @@ CLASSIFIERS     = [
                     "Development Status :: Beta",
                     "Intended Audience :: Geophysicist",
                     "Natural Language :: English",
-                    F"License :: {LICENSE}",
+                    f"License :: {LICENSE}",
                     "Operating System :: OS Independent",
                     "Programming Language :: Python :: 3.7",
                     "Topic :: Scientific/Engineering",
