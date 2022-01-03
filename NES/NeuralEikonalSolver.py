@@ -317,7 +317,7 @@ class NES_OP():
         h = self.model.fit(x=self.x_train, y=self.y_train, **train_kw)
         return h
 
-    def train_evolution(self, max_epochs=1000, x_train=None, tqdm=None, T_test_set=None,
+    def train_evolution(self, max_epochs=1000, step_epochs=10, x_train=None, tqdm=None, T_test_set=None,
                  t_evol=False, compile_kw=dict(lr=1e-3, decay=1e-4, loss='mae'), 
                  pred_kw=dict(batch_size=100000), **train_kw):
         """
