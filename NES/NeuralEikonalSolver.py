@@ -510,15 +510,14 @@ class NES_TP():
             D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='Distance')(xr_xs)    
             T = L.Multiply(name='D_factor')([T, D])
 
-        # Symmetric function T(xs,xr)=T(xr,xs)
-        if symmetric:
+        # Reciprocity T(xs,xr)=T(xr,xs)
+        if reciprocity:
             t = Model(inputs=inputs, outputs=T)
             xsr = xs_list + xr_list; xrs = xr_list + xs_list;
             tsr = t(xsr); trs = t(xrs)
-            T = L.Lambda(lambda x: 0.5*(x[0] + x[1]), name='Symmetry')([tsr, trs])
+            T = L.Lambda(lambda x: 0.5*(x[0] + x[1]), name='Reciprocity')([tsr, trs])
 
         Tm = Model(inputs=inputs, outputs=T)
-        
 
         # Eikonal over 'xr'
         dTr_list = Diff(name='gradient_xr')([T, xr_list])
