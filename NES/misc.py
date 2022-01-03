@@ -1,7 +1,5 @@
 import numpy as np
-from scipy.ndimage import gaussian_filter
 from scipy.interpolate import RegularGridInterpolator
-
 
 ######################################################
                 ### MISCELLANEOUS ###

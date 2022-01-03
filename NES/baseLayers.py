@@ -23,8 +23,8 @@ ACTS = {
         'laplace' : lambda z: tf.math.exp(-tf.abs(z))
         }
 
-class Activation(L.Layer):
-    """ Layer for activation function. Overriden to include adaptivity
+class AdaptiveActivation(L.Layer):
+    """ Layer for activation function.
     """
     def __init__(self, act, **kwargs):
         """
@@ -32,7 +32,7 @@ class Activation(L.Layer):
                                   Format of activation - 'act(x) = f(a * n * x)', where 'a' is adaptive term (trainable weight), 
                                   'n' constant term (degree of adaptivity). If 'ad' presents, 'a' is trainable, otherwise 'a=1'.
         """
-        super(Activation, self).__init__(**kwargs)
+        super(AdaptiveActivation, self).__init__(**kwargs)
         parts = act.split('-')
         assert len(parts) == 3
         self.adapt = 'ad' in parts[0]
@@ -51,18 +51,38 @@ class Activation(L.Layer):
             return self.act(self.n * X)
 
     def get_config(self):
-        config = super(Activation, self).get_config()
+        config = super(AdaptiveActivation, self).get_config()
         config.update({"n": self.n, 
                         "adapt" : self.adapt, 
                         "act" : self.act, })
         return config
 
 
+def Activation(act):
+    """
+        Checks adaptivity requirement for activation
+
+        Arguments:
+            act : str : It can be two types:
+                        1) regular activation function - just name, 'tanh', 'relu', 'gauss', ...
+                        2) adaptive activation - 'ad-name-n', where 'ad' means including trainable weight 'a',
+                           'n' is constan integer value describing the adaptivity degree. Format - act(x) = name(a * n * x).
+                           Example: 'ad-gauss-1' (adaptive) or '-tanh-2' (not adaptive)
+    """
+    parts = act.split('-')
+    if (len(parts) == 1):
+        if act in ACTS.keys():
+            return ACTS[act]
+        else:
+            return act
+    else:
+        return AdaptiveActivation(act)
+
 #######################################################################
-                        ### API LAYERS ###
+                            ### API LAYERS ###
 #######################################################################
 
-def DenseBody(inputs, nu, nl, out_dim=1, act='lad-gauss-1', out_act='lad-sigmoid-1', **kwargs):
+def DenseBody(inputs, nu, nl, out_dim=1, act='ad-gauss-1', out_act='ad-sigmoid-1', **kwargs):
     """
         API function that construct the block of fully connected layers.
 
@@ -71,11 +91,8 @@ def DenseBody(inputs, nu, nl, out_dim=1, act='lad-gauss-1', out_act='lad-sigmoid
             nl : int : Number of hidden layers, by default 'nl=4'
             nu : int or list of ints : Number of hidden units of each hidden layer, by default 'nu=50'
             out_dim : int : Output dimenstion, by default 'out_dim = 1'
-            act : formatted str : Hidden activation in format '(ad) -activation_name- n'.
-                                  Format of activation - 'act(x) = f(a * n * x)', where 'a' is adaptive term (trainable weight), 
-                                  'n' constant term (degree of adaptivity). If 'ad' presents, 'a' is trainable, otherwise 'a=1'.
-                                  By default "act = 'ad-gauss-1' "
-            out_act : formatted str : Output activation in the same format as 'act'. By default "act = 'ad-sigmoid-1' "
+            act : str : Hidden activation, see description 'NES.baseLayers.Activation'. By default 'ad-gauss-1'
+            out_act : formatted str : Output activation, see description 'NES.baseLayers.Activation'. By default 'ad-sigmoid-1'
             **kwargs : keyword arguments : Arguments for tf.keras.layers.Dense(**kwargs) such as 'kernel_initializer'.
                         If "kwargs.get('kernel_initializer')" is None then "kwargs['kernel_initializer'] = 'he_normal' "
         Returns:

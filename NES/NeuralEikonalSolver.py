@@ -6,7 +6,6 @@ from tensorflow.keras.models import Model
 from .baseLayers import DenseBody, Diff, SourceLoc
 from .eikonalLayers import IsoEikonal
 from .misc import Interpolator
-from scipy.spatial.distance import cdist
 
 ###############################################################################
                     ### ONE POINT NEURAL EIKONAL SOLVER ###
