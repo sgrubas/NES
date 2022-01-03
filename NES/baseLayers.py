@@ -141,6 +141,9 @@ class LossesHolder(tf.keras.callbacks.Callback):
             self.logs['val_loss'].append(logs['val_loss'])
 
 
+def EarlyStopping(tolerance):
+    pass
+
 class Initializer(initializers.Initializer):
     """
         Initializer that converts 'numpy array' to 'tf.Tensor'

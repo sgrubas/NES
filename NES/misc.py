@@ -38,12 +38,15 @@ class Interpolator:
     Func = None
     dFunc = None
     LFunc = None
+    xmin = None
+    xmax = None
+
     def __init__(self, F, *axes, **interp_kw):
         """
         The interpolator uses 'scipy.interpolate.RegularGridInterpolator'
         
         Arguments:
-            F: numpy array (nx,ny) or (nx,ny,nz)
+            F: numpy array (nx,) or (nx,ny) or (nx,ny,nz)
                 Values 
             axes: tuple of numpy arrays (nx,), (ny), (nz)
                 Grid
@@ -53,6 +56,9 @@ class Interpolator:
         self.axes = axes
         self.F = F
         self.Func = RegularGridInterpolator(axes, F, **interp_kw)
+
+        self.xmin = [xi.min() for xi in axes]
+        self.xmax = [xi.max() for xi in axes]
 
     def __call__(self, X):
         """
