@@ -41,5 +41,5 @@ setup(
     url="",
     zip_safe=False,
     install_requires=INSTALL_REQUIRES,
-    include_package_data=True,
-    package_data={NAME: ["lib/*.so"]})
+    # include_package_data=True,
+    package_data={"data": ["*.npy"]})
