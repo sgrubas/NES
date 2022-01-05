@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import gaussian_filter
+import pkg_resources
 
 
 ######################################################
@@ -96,12 +97,17 @@ class VerticalGradient:
     """
     v0 = None
     a = None
-    def __init__(self, v0, a):
+    xmin = None
+    xmax = None
+
+    def __init__(self, v0, a, xmin=None, xmax=None):
         """ v0 : initial velocity ar z=0
             a : gradient of velocity
         """
         self.v0 = v0
         self.a = a
+        self.xmin = xmin
+        self.xmax = xmax
 
     def __call__(self, X):
         """ Computes the velocity value at 'X', where X is (...., dim), and z=X[..., -1]
@@ -144,17 +150,23 @@ class LocAnomaly:
     sigmas = None
     vmin = None
     vmax = None
+    xmin = None
+    xmax = None
 
-    def __init__(self, vmin, vmax, mus, sigmas):
+    def __init__(self, vmin, vmax, mus, sigmas, xmin=None, xmax=None):
         """ vmin : minimal velocity
             vmax : maximal velocity
             mus : center of gaussian anomaly
             sigmas : width of gaussian anomaly
+            xmin : [x_min, y_min, z_min] lower bound of the domain
+            xmax : [x_max, y_max, z_max] upper bound of the domain
         """
         self.mus = mus.reshape(1, -1)
         self.sigmas = sigmas.reshape(1, -1)
         self.vmin = vmin
         self.vmax = vmax
+        self.xmin = xmin
+        self.xmax = xmax
 
     def __call__(self, X):
         """ Computes the velocity value at 'X'
@@ -181,8 +193,9 @@ def Marmousi(smooth=None, section=None):
         Return:
             Vel : instance of 'NES.Interpolator' for Marmousi model in 'km/s' units
     """
-
-    V = np.load('/data/Marmousi_Pwave_smooth_12_5m.npy') / 1000.0
+    # V = np.load('/data/Marmousi_Pwave_smooth_12_5m.npy') / 1000.0
+    f = pkg_resources.resource_stream(__name__, "data//Marmousi_Pwave_smooth_12_5m.npy")
+    V = np.load(f) / 1000.0
     if section is not None:
         i = [0, V.shape[0]+1] if section[0] is None else section[0]
         j = [0, V.shape[1]+1] if section[1] is None else section[1]
