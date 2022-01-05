@@ -41,6 +41,8 @@ class Interpolator:
     LFunc = None
     xmin = None
     xmax = None
+    min = None
+    max = None
 
     def __init__(self, F, *axes, **interp_kw):
         """
@@ -60,6 +62,8 @@ class Interpolator:
 
         self.xmin = [xi.min() for xi in axes]
         self.xmax = [xi.max() for xi in axes]
+        self.min = F.min()
+        self.max = F.max()
 
     def __call__(self, X):
         """
