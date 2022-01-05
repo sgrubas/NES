@@ -42,5 +42,5 @@ setup(
     zip_safe=False,
     install_requires=INSTALL_REQUIRES,
     # include_package_data=True,
-    package_data={"": ["data/*.npy"]}
+    package_data={"": ["*.npy"]}
     )
