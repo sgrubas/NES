@@ -8,6 +8,7 @@ bin-release/
 .settings/
 /NES/__pycache__/
 NES.egg-info/
+/notebooks/.ipynb_checkpoints
 
 
 # Executables
@@ -16,6 +17,7 @@ NES.egg-info/
 *.ipa
 *.apk
 *.pyc
+*.
 
 # Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
 # should NOT be excluded as they contain compiler settings and other important
