@@ -37,10 +37,12 @@ setup(
     maintainer_email=EMAIL,
     classifiers=CLASSIFIERS,
     keywords=KEYWORDS,
-    packages=find_packages(),
-    url="",
+    packages=find_packages(NAME),
+    package_dir={"": NAME},
+    url=URL,
     zip_safe=False,
     install_requires=INSTALL_REQUIRES,
     # include_package_data=True,
-    package_data={"": ["*.npy"]}
+    package_data={NAME: ["data/*.npy"]}
     )
+

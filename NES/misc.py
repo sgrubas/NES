@@ -182,7 +182,7 @@ def Marmousi(smooth=None, section=None):
             Vel : instance of 'NES.Interpolator' for Marmousi model in 'km/s' units
     """
 
-    V = np.load('../data/Marmousi_Pwave_smooth_12_5m.npy') / 1000.0
+    V = np.load('/data/Marmousi_Pwave_smooth_12_5m.npy') / 1000.0
     if section is not None:
         i = [0, V.shape[0]+1] if section[0] is None else section[0]
         j = [0, V.shape[1]+1] if section[1] is None else section[1]
