@@ -3,73 +3,46 @@ import numpy as np
 import tensorflow.keras.layers as L
 from tensorflow.keras.layers.experimental.preprocessing import Rescaling
 from tensorflow.keras.models import Model
-from .baseLayers import DenseBody, Diff, SourceLoc
+from .baseLayers import DenseBody, Diff, SourceLoc, NES_EarlyStopping
 from .eikonalLayers import IsoEikonal
 from .misc import Interpolator
+import pickle
+import pathlib
 
 ###############################################################################
                     ### ONE POINT NEURAL EIKONAL SOLVER ###
 ###############################################################################
 
-class NES_OP():
+class NES_OP:
     """
     Neural Eikonal Solver for solving the equation in One-Point formulation tau(xr)
+
+    Arguments:
+        xs : list or array (dim,) of floats : Source location. 'dim' - dimension
+        velocity : object : Velocity model class. Must be callable in a format 'v(xr) = velocity(xr)'. 
+                            See example in 'misc.Interpolator'
+        eikonal : instance of tf.keras.layers.Layer : Layer that mimics the eikonal equation. 
+                  There must two inputs: list of spatial derivatives, velocity value. 
+                  Format example - 'eikonal([tau_x, tau_y, tau_z], v(x, y, z))'. 
+                  If 'None', 'eikonalLayers.IsoEikonal(P=3, hamiltonian=True)' is used.
+
     """
-    def __init__(self, xr, xs, xscale=None, 
-                 vmin=None, vmax=None,
-                 velocity=None, eikonal=None):
-        """
-            Initializer of NES_OP.
-
-            Arguments:
-                xr : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension
-                xs : list or array (dim,) of floats : Source location. 'dim' - dimension
-                xscale : float : Constant for scaling inputs. If 'None', 'max|xr|' is used
-                vmin : flaot : Minimal velocity value for improved factorization. If 'None', 'min v(xr)' is used
-                vmax : flaot : Maximal velocity value for improved factorization. If 'None', 'max v(xr)' is used
-                velocity : object : Velocity model class. Must be callable in a format 'v(xr) = velocity(xr)'. 
-                                    See example in 'misc.Interpolator'
-                eikonal : instance of tf.keras.layers.Layer : Layer that mimics the eikonal equation. 
-                          There must two inputs: list of spatial derivatives, velocity value. 
-                          Format example - 'eikonal([tau_x, tau_y, tau_z], v(x, y, z))'. 
-                          If 'None', 'eikonalLayers.IsoEikonal(P=3, hamiltonian=True)' is used.
-
-        """
-
-        # Receivers
-        self.xr = xr
-        assert len(xr.shape) == 2
-        self.dim = xr.shape[-1]
-
+    def __init__(self, xs, velocity, eikonal=None):
+        
         # Source
         if isinstance(xs, (list, np.ndarray)):
             self.xs = np.array(xs).squeeze()
-            assert self.dim == len(self.xs), "Dimension for 'xs' and 'xr' must coincide"
+            self.dim = len(xs)
         else: 
-            assert False, "Unrecognized 'xs' type "
-
-        # Relative coordinates
-        self.x = self.xr - self.xs[None, ...]
-
-        # Input scale factor
-        if xscale is None: 
-            self.xscale = np.abs(self.x).max()
-        else: 
-            self.xscale = xscale
+            assert False, "Unrecognized 'xs' type"
         
         # Velocity
         assert callable(velocity), "Must be callable in a format 'v(xr) = velocity(xr)'"
         self.velocity = velocity
 
-        if vmin is None: 
-            self.vmin = self.velocity(self.xr).min()
-        else: 
-            self.vmin = vmin
-
-        if vmax is None: 
-            self.vmax = self.velocity(self.xr).max()
-        else: 
-            self.vmax = vmax
+        # Input scale factor
+        self.xscale = np.max(np.abs([self.velocity.xmin, 
+                                     self.velocity.xmax]))
 
         # Eikonal equation layer 
         if eikonal is None:
@@ -78,9 +51,10 @@ class NES_OP():
             assert isinstance(eikonal, L.Layer), "Eikonal should be an instance of keras Layer"   
             self.equation = eikonal
 
-        self.x_train = None
-        self.y_train = None
-        
+        self.x_train = None     # input training data
+        self.y_train = None     # output training data
+        self.compiled = False   # compilation status
+        self.config = {}        # config data of NN model to be reproducible
     
     def build_model(self, nl=4, nu=50, act='ad-gauss-1', out_act='ad-sigmoid-1', 
                     input_scale=True, factored=True, out_vscale=True, **kwargs):       
@@ -103,43 +77,57 @@ class NES_OP():
                             If "kwargs.get('kernel_initializer')" is None then "kwargs['kernel_initializer'] = 'he_normal' "
 
         """
+        # Saving configuration for reproducibility, to save and load model
+        self.config['nl'] = nl
+        self.config['nu'] = nu
+        self.config['act'] = act
+        self.config['out_act'] = out_act
+        self.config['input_scale'] = input_scale
+        self.config['factored'] = factored
+        self.config['out_vscale'] = out_vscale
 
+        # The best initializer
         if kwargs.get('kernel_initializer') is None:
             kwargs['kernel_initializer'] = 'he_normal'
+
+        for kw, v in kwargs.items():
+            self.config[kw] = v
 
         # Receiver coordinate input
         xr_list = [L.Input(shape=(1,), name=f'xr{i}') for i in range(self.dim)]
 
         # Source coordinate reduction
-        xr = L.Concatenate(axis=-1)(xr_list)
-        xs = SourceLoc(self.xs)(xr)
-        x = L.Subtract(name='xr_xs')([xr, xs])
-
-        # Velocity input
-        v = L.Input(shape=(1,), name='v')
+        xr = L.Concatenate(name='xr', axis=-1)(xr_list)
+        xs = SourceLoc(self.xs, name='SourceLoc')(xr)
+        x = L.Subtract(name='Centering')([xr, xs])
 
         # Trainable body with Traveltime Output
         if input_scale:
-            x_sc = Rescaling(1 / self.xscale, name='x_scaling')(x)
+            x_sc = Rescaling(1 / self.xscale, name='input_scaling')(x)
         else:
             x_sc = x
 
         T = DenseBody(x_sc, nu, nl, out_dim=1, act=act, out_act=out_act, **kwargs)
 
         # Factorized solution
-        D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='D_factor')(x)
         if out_vscale:
-            T = L.Lambda(lambda z: (1 / self.vmin - 1 / self.vmax) * z + 1 / self.vmax, name='V_factor')(T)
-        T = L.Multiply(name='Traveltime')([T, D])
+            vmin, vmax = self.velocity.min, self.velocity.max
+            T = L.Lambda(lambda z: (1 / vmin - 1 / vmax) * z + 1 / vmax, name='V_factor')(T)
+        if factored:
+            D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='D_factor')(x)
+            T = L.Multiply(name='Traveltime')([T, D])
 
         # Final Traveltime Model
         Tm = Model(inputs=xr_list, outputs=T)
 
+        # Velocity input
+        v = L.Input(shape=(1,), name='v')
+
         # Eikonal equation
-        dT_list = Diff(name='gradient')([T, xr_list])
-        dT = L.Concatenate(axis=-1)(dT_list)
+        dT_list = Diff(name='gradients')([T, xr_list])
+        dT = L.Concatenate(name='Gradient', axis=-1)(dT_list)
         Gm = Model(inputs=xr_list, outputs=dT)
-        
+
         Eq = self.equation(dT_list, v)
         Em = Model(inputs=xr_list + [v], outputs=Eq)
 
@@ -160,10 +148,10 @@ class NES_OP():
         LT = L.Lambda(lambda z: tf.reduce_sum(z, axis=-1, keepdims=True), name='Laplacian')(d2T)
         Lm = Model(inputs=xr_list, outputs=LT)
 
-        # Callable outputs
+        # All callable models
         self.outs = dict(T=Tm, E=Em, G=Gm, V=Vm, L=Lm)
 
-    def Traveltime(self, xr=None, **pred_kw):
+    def Traveltime(self, xr, **pred_kw):
         """
             Computes traveltimes.
 
@@ -178,7 +166,7 @@ class NES_OP():
         T = self.outs['T'].predict(X, **pred_kw)
         return T
 
-    def Gradient(self, xr=None, **pred_kw):
+    def Gradient(self, xr, **pred_kw):
         """
             Computes gradients - vector (tau_dx, tau_dy, tau_dz).
 
@@ -193,7 +181,7 @@ class NES_OP():
         G = self.outs['G'].predict(X, **pred_kw)
         return G
 
-    def Laplacian(self, xr=None, **pred_kw):
+    def Laplacian(self, xr, **pred_kw):
         """
             Computes laplacian - tau_dxdx + tau_dydy + tau_dzdz.
 
@@ -208,7 +196,7 @@ class NES_OP():
         L = self.outs['L'].predict(X, **pred_kw)
         return L
         
-    def Velocity(self, xr=None, **pred_kw):
+    def Velocity(self, xr, **pred_kw):
         """
             Computes predicted velocity - 1 / ||( tau_dx, tau_dy, tau_dz) ||.
 
@@ -223,31 +211,34 @@ class NES_OP():
         V = self.outs['V'].predict(X, **pred_kw)
         return V
 
-    def train_inputs(self, xr=None):
+    @staticmethod
+    def _prepare_inputs(model, x, velocity):
         """
-            Creates dictionary of inputs for training.
+            Creates dictionary according to the input names of model
+        """
+        X = {}
+        for kwi in model.input_names:
+            if 'v' in kwi:
+                X['v'] = velocity(x).ravel()
+            else:
+                X[kwi] = x[..., int(kwi[-1])].ravel()
+        return X
+
+    def train_inputs(self, xr):
+        """
+            Creates dictionary of inputs for training. Removes singular points (xr=xs)
 
             Arguments:
                 xr : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension
         """
-        if xr is not None:
-            self.xr = xr.reshape(-1, self.dim)
-            self.x = self.xr - self.xs[None, ...]
 
-        self.x_train = {}
-        ids = (abs(self.x)).sum(axis=-1) != 0 # removing singular point
-        self.xr = self.xr[ids]
-        self.x = self.x[ids]
+        ids = abs(xr - self.xs[None, ...]).sum(axis=-1) != 0 # removing singular point
+        self.x_train = self._prepare_inputs(self.model, xr[ids], self.velocity)
+    
 
-        for kwi in self.model.input_names:
-            if 'v' in kwi:
-                self.x_train['v'] = self.velocity(self.xr).ravel()
-            else:
-                self.x_train[kwi] = self.xr[..., int(kwi[-1])]
-
-    def predict_inputs(self, xr=None, out='E'):
+    def predict_inputs(self, xr, out='T'):
         """
-            Creates dictionary of inputs for prediction.
+            Creates dictionary of inputs for prediction for different output models `out`.
 
             Arguments:
                 xr : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension
@@ -256,27 +247,12 @@ class NES_OP():
             Returns:
                 X : dict : dictionary of inputs to be feed in a model 'out'
         """
-        if xr is None:
-            xr = self.xr
-        else:
-            xr = xr.reshape(-1, self.dim)
-
-        X = {}
-        for kwi in self.outs[out].input_names:
-            if 'v' in kwi:
-                X['v'] = self.velocity(xr).ravel()
-            else:
-                X[kwi] = xr[..., int(kwi[-1])]
-
-        return X
+        return self._prepare_inputs(self.outs[out], xr, self.velocity)
 
     def train_outputs(self,):
         """
             Creates dictionary of output for training (target values). All target values will be zero.
         """
-        if self.x_train is None:
-            self.train_inputs()
-
         self.y_train = {}
         xi = list(self.x_train.values())[0]
         for l in self.model.output_names:
@@ -298,24 +274,121 @@ class NES_OP():
             optimizer = tf.optimizers.Adam(learning_rate=lr, decay=decay)
 
         self.model.compile(optimizer=optimizer, loss=loss, **kwargs)
+        self.compiled = True
 
-    def train(self, x_train=None, tol=None, **train_kw):
+    def train(self, x_train=None, tolerance=None, **train_kw):
         """
             Traines the neural-network model.
 
             Arguments:
-                x_train : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension. 
-                                If 'None', "NES_OP.x" are used.
-                tol : float : Tolerance value for early stopping in RMAE units for traveltimes. 
-                              Empiric dependence 'RMAE = C exp(-Loss)' is used. If 'None', 'tol' is not used
+                x_train : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension.
+                                If 'None', previous `NES_OP.x_train` may be used if available
+                tolerance : It can be:
+                    1) float - Tolerance value for early stopping in RMAE units for traveltimes.
+                               NES_EarlyStopping callback will be created with default options 
+                               (see `baseLayers.NES_EarlyStopping`)
+                    2) instance of NES_EarlyStopping callback. 
+                              
                 **train_kw : keyword arguments : Arguments for 'tf.keras.models.Model.fit(**train_kw)' such as 'batch_size', 'epochs'
         """
-        if self.x_train is None:
+        if x_train is None:
+            assert self.x_train is not None, " if `x_train` is not given, `NES_OP.x_train` must be defined"
+        else:
             self.train_inputs(x_train)
+
         if self.y_train is None:
             self.train_outputs()
+
+        if not self.compiled:
+            self.compile()
+
+        if isinstance(tolerance, (float, tf.keras.callbacks.Callback)):
+            if isinstance(tolerance, float):
+                EarlyStopping = NES_EarlyStopping(tolerance=tolerance)
+            else:
+                EarlyStopping = tolerance
+
+            if train_kw.get('callbacks') is None:
+                train_kw['callbacks'] = [EarlyStopping]
+            else:
+                train_kw['callbacks'].append(EarlyStopping)
+
         h = self.model.fit(x=self.x_train, y=self.y_train, **train_kw)
         return h
+
+    def save(self, filepath, save_training=False):
+        """
+            Saves the current NES_OP model to `filepath` directory.
+            `save_training` is needed to continue the training from the last point,
+            it includes `optimizer state` and `training data`.
+        """
+        config = self.config
+        config['velocity'] = self.velocity
+        config['xs'] = self.xs
+        config['equation.config'] = self.equation.get_config()
+
+        if save_training:
+            config['x_train'] = self.x_train
+            config['optimizer.config'] = self.model.optimizer.get_config()
+            config['optimizer.weights'] = self.model.optimizer.get_weights()
+            config['loss'] = self.model.loss
+
+        # makedir
+        pathlib.Path(filepath).mkdir(parents=True, exist_ok=True)
+        filename = filepath.split('/')[-1].split('.')[0]
+
+        # configuration
+        with open(filepath + f'/{filename}_config', 'wb') as f: 
+            pickle.dump(config, f)
+        # weights
+        self.outs['T'].save_weights(filepath + f'/{filename}_weights.h5')
+
+    @staticmethod
+    def load(filepath):
+        """
+            Creates an NES_OP instance according to the configuration 
+            and pretrained_weights in `filepath`
+
+            Returns:
+                NES_OP : NES_OP instance 
+        """
+        training_saved = False
+        filename = filepath.split('/')[-1].split('.')[0]
+        # Importing configuration data
+        with open(filepath + f'/{filename}_config', 'rb') as f: 
+            config = pickle.load(f)
+
+        eikonal = IsoEikonal.from_config(config.pop('equation.config'))
+
+        # Creating an NES_OP instance according to the configuration
+        NES_OP_instance = NES_OP(xs=config.pop('xs'), 
+                                 velocity=config.pop('velocity'), 
+                                 eikonal=eikonal)
+
+        # Loading optimizer state if available
+        if config.get('optimizer.config') is not None:
+            training_saved = True
+            NES_OP_instance.x_train = config.pop('x_train')
+            opt_config = config.pop('optimizer.config')
+            opt_weights = config.pop('optimizer.weights')
+            loss = config.pop('loss')
+            
+        NES_OP_instance.build_model(**config)
+
+        # Loading pretrained weights according to the topology
+        NES_OP_instance.outs['T'].load_weights(filepath + f'/{filename}_weights.h5', 
+                                                by_name=False)
+
+        if training_saved:
+            optimizer = tf.keras.optimizers.get(opt_config['name']).from_config(opt_config)
+            optimizer._create_all_weights(NES_OP_instance.model.trainable_variables)
+            optimizer.set_weights(opt_weights)
+            NES_OP_instance.compile(optimizer=optimizer, loss=loss)
+            print('Model loaded and compiled')
+        else:
+            print('Model loaded and not compiled')
+
+        return NES_OP_instance
 
     def train_evolution(self, max_epochs=1000, step_epochs=10, x_train=None, tqdm=None, T_test_set=None,
                  t_evol=False, compile_kw=dict(lr=1e-3, decay=1e-4, loss='mae'), 
@@ -384,57 +457,29 @@ class NES_OP():
                     ### TWO POINT NEURAL EIKONAL SOLVER ###
 ##############################################################################
 
-class NES_TP():
+class NES_TP:
     """
-    Neural Eikonal Solver for solving the equation in Two-Point formulation tau(xs, xr)
+    Neural Eikonal Solver for solving the equation in Two-Point formulation T(xs, xr)
+
+    Arguments:
+        velocity : object : Velocity model class. Must be callable in a format 'v(xr) = velocity(xr)'. 
+                            See example in 'misc.Interpolator'
+        eikonal : instance of tf.keras.layers.Layer : Layer that mimics the eikonal equation. 
+                  There must be two inputs: list of spatial derivatives, velocity value. 
+                  Format example - 'eikonal([tau_x, tau_y, tau_z], v(x, y, z))'. 
+                  If 'None', 'eikonalLayers.IsoEikonal(P=3, hamiltonian=True)' is used.
     """
-    def __init__(self, x, xscale=None, 
-                 vmin=None, vmax=None,
-                 velocity=None, eikonal=None):
-        """
-            Initializer of NES_TP.
 
-            Arguments:
-                x : numpy array (N, dim*2) of floats : Array of source-receiver pairs, where sources (N, :dim) and receivers (N, dim:). 
-                                'N' - number of source-receiver pairs, 'dim' - dimension
-                xscale : float : Constant for scaling inputs. If 'None', 'max|x|' is used
-                vmin : flaot : Minimal velocity value for improved factorization. If 'None', 'min v(xr)' is used
-                vmax : flaot : Maximal velocity value for improved factorization. If 'None', 'max v(xr)' is used
-                velocity : object : Velocity model class. Must be callable in a format 'v(xr) = velocity(xr)'. 
-                                    See example in 'misc.Interpolator'
-                eikonal : instance of tf.keras.layers.Layer : Layer that mimics the eikonal equation. 
-                          There must two inputs: list of spatial derivatives, velocity value. 
-                          Format example - 'eikonal([tau_x, tau_y, tau_z], v(x, y, z))'. 
-                          If 'None', 'eikonalLayers.IsoEikonal(P=3, hamiltonian=True)' is used.
-
-        """
-
-
-        # Grid 
-        self.x = x
-        self.dim = x.shape[-1] // 2
-        self.xs = self.x[..., :self.dim]
-        self.xr = self.x[..., self.dim:]
-
-        # Input scale factor
-        if xscale is None: 
-            self.xscale = np.abs(self.x).max()
-        else: 
-            self.xscale = xscale
+    def __init__(self, velocity, eikonal=None):
         
         # Velocity
-        assert callable(velocity)
+        assert callable(velocity), "Must be callable in a format 'v(xr) = velocity(xr)'"
         self.velocity = velocity
+        self.dim = len(self.velocity.xmin)
 
-        if vmin is None: 
-            self.vmin = self.velocity(self.xr).min()
-        else: 
-            self.vmin = vmin
-
-        if vmax is None: 
-            self.vmax = self.velocity(self.xr).max()
-        else: 
-            self.vmax = vmax
+        # Input scale factor
+        self.xscale = np.max(np.abs([self.velocity.xmin, 
+                                     self.velocity.xmax]))
 
         # Eikonal equation layer 
         if eikonal is None:
@@ -443,13 +488,16 @@ class NES_TP():
             assert isinstance(eikonal, L.Layer), "Eikonal should be an instance of keras Layer"   
             self.equation = eikonal
 
-        self.x_train = None
-        self.y_train = None
+        self.x_train = None     # input training data
+        self.y_train = None     # output training data
+        self.compiled = False   # compilation status
+        self.config = {}        # config data of NN model to be reproducible
+        self.losses = ['Er']    # outputs for training losses. Since this is Two-Point formulation, 
+                                # we can solve two eikonal equations according to the reciprocity principle.
+                                # 'Er' is equation w.r.t. 'xr', 'Es' is equation w.r.t. 'xr'.
         
     def build_model(self, nl=4, nu=50, act='lad-gauss-1', out_act='lad-sigmoid-1', 
-                    factored=True, out_vscale=True, input_scale=True, reciprocity=True, 
-                    losses=['Er'], **kwargs):
-
+                    factored=True, out_vscale=True, input_scale=True, reciprocity=True, **kwargs):
         """
             Build a neural-network model using Tensorflow.
 
@@ -467,28 +515,36 @@ class NES_TP():
                                        If 'True', the 'out_act' must be bounded in [0, 1]. By default 'out_vscale=True'
                 reciprocity : boolean : Enhanced factorization for NES_TP incorporating the reciprocity principle tau(xs, xr) = tau(xr, xs).
                                         By default 'True'
-                losses : list of str : Since this is Two-Point formulation, we can solve two eikonal equations according to the reciprocity principle.
-                                       'Er' is equation w.r.t. 'xr', 'Es' is equation w.r.t. 'xr'. By default 'losses = ['Er']'
                 **kwargs : keyword arguments : Arguments for tf.keras.layers.Dense(**kwargs) such as 'kernel_initializer'.
                             If "kwargs.get('kernel_initializer')" is None then "kwargs['kernel_initializer'] = 'he_normal' "
 
         """
+        # Saving configuration for reproducibility, to save and load model
+        self.config['nl'] = nl
+        self.config['nu'] = nu
+        self.config['act'] = act
+        self.config['out_act'] = out_act
+        self.config['input_scale'] = input_scale
+        self.config['factored'] = factored
+        self.config['out_vscale'] = out_vscale
+        self.config['reciprocity'] = reciprocity
+        self.config['losses'] = self.losses
 
+        # The best initializer
         if kwargs.get('kernel_initializer') is None:
             kwargs['kernel_initializer'] = 'he_normal'
+
+        for kw, v in kwargs.items():
+            self.config[kw] = v
 
         ## Input for Source part
         xs_list = [L.Input(shape=(1,), name='xs' + str(i)) for i in range(self.dim)]
         xs = L.Concatenate(axis=-1)(xs_list)
 
-        vs = L.Input(shape=(1,), name='vs')
-
         ## Input for Receiver part
         xr_list = [L.Input(shape=(1,), name='xr' + str(i)) for i in range(self.dim)]
         xr = L.Concatenate(axis=-1)(xr_list)
         
-        vr = L.Input(shape=(1,), name='vr')
-
         # Input list
         inputs = xs_list + xr_list
 
@@ -498,17 +554,18 @@ class NES_TP():
             X_sc = Rescaling(1 / self.xscale, name='X_scaling')(X)
         else:
             X_sc = X
-        T = DenseBody(X, nu, nl, out_dim=1, act=act, out_act=out_act, **kwargs)
+
+        T = DenseBody(X_sc, nu, nl, out_dim=1, act=act, out_act=out_act, **kwargs)
 
         ### Factorization ###
         # Scaling to the range of [1/vmax , 1/vmin]. T is assumed to be in [0, 1]
         if out_vscale:
-            T = L.Lambda(lambda z: (1 / self.vmin - 1 / self.vmax) * z + 1 / self.vmax, name='V_factor')(T)
-
+            vmin, vmax = self.velocity.min, self.velocity.max
+            T = L.Lambda(lambda z: (1 / vmin - 1 / vmax) * z + 1 / vmax, name='V_factor')(T)
         if factored:
             xr_xs = L.Subtract(name='xr_xs_difference')([xr, xs])
-            D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='Distance')(xr_xs)    
-            T = L.Multiply(name='D_factor')([T, D])
+            D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='D_factor')(xr_xs)    
+            T = L.Multiply(name='Traveltime')([T, D])
 
         # Reciprocity T(xs,xr)=T(xr,xs)
         if reciprocity:
@@ -519,19 +576,23 @@ class NES_TP():
 
         Tm = Model(inputs=inputs, outputs=T)
 
-        # Eikonal over 'xr'
-        dTr_list = Diff(name='gradient_xr')([T, xr_list])
-        dTr = L.Concatenate(axis=-1)(dTr_list)
+        # Gradient over 'xr'
+        dTr_list = Diff(name='gradients_xr')([T, xr_list])
+        dTr = L.Concatenate(axis=-1, name='Gradient_xr')(dTr_list)
         Gr = Model(inputs=inputs, outputs=dTr)
 
+        # Eikonal over 'xr'
+        vr = L.Input(shape=(1,), name='vr') # velocity input for 'xr'
         Er = self.equation(dTr_list, vr)
         Emr = Model(inputs=inputs + [vr], outputs=Er)
 
-        # Eikonal over 'xs'
-        dTs_list = Diff(name='gradient_xs')([T, xs_list])
-        dTs = L.Concatenate(axis=-1)(dTs_list)
+        # Gradient over 'xs'
+        dTs_list = Diff(name='gradients_xs')([T, xs_list])
+        dTs = L.Concatenate(axis=-1, name='Gradient_xs')(dTs_list)
         Gs = Model(inputs=inputs, outputs=dTs)
 
+        # Eikonal over 'xs'
+        vs = L.Input(shape=(1,), name='vs') # velocity input for 'xs'
         Es = self.equation(dTs_list, vs)
         Ems = Model(inputs=inputs + [vs], outputs=Es)
 
@@ -539,20 +600,27 @@ class NES_TP():
         d2Tr_list = []
         for i, dTri in enumerate(dTr_list):
             d2Tr_list += Diff(name='d2Trr' + str(i))([dTri, xr_list[i:]])
-        HTr = L.Concatenate(axis=-1)(d2Tr_list)
+        HTr = L.Concatenate(axis=-1, name='Hessians_xr')(d2Tr_list)
         Hmr = Model(inputs=inputs, outputs=HTr)
 
-        # Models
-        self.outs = dict(T=Tm, Er=Emr, Es=Ems, Gr=Gr, Gs=Gs, HTr=Hmr)
+        #### Hessians ss ####
+        d2Ts_list = []
+        for i, dTsi in enumerate(dTs_list):
+            d2Ts_list += Diff(name='d2Tss' + str(i))([dTsi, xs_list[i:]])
+        HTs = L.Concatenate(axis=-1, name='Hessians_xs')(d2Ts_list)
+        Hms = Model(inputs=inputs, outputs=HTs)
         
         # Trainable model
         kw_models = dict(Er=Er, Es=Es)
-        model_outputs = [kw_models[kw] for kw in losses]
-        model_inputs = inputs + [vr] * ('Er' in losses) + [vs] * ('Es' in losses)
+        model_outputs = [kw_models[kw] for kw in self.losses]
+        model_inputs = inputs + [vr] * ('Er' in self.losses) + [vs] * ('Es' in self.losses)
         self.model = Model(inputs=model_inputs, outputs=model_outputs)
-        
 
-    def Traveltime(self, x=None, **pred_kw):
+        # All callable models
+        self.outs = dict(T=Tm, Er=Emr, Es=Ems, 
+                         Gr=Gr, Gs=Gs, HTr=Hmr, HTs=Hms)
+
+    def Traveltime(self, x, **pred_kw):
         """
             Computes traveltimes.
 
@@ -567,7 +635,7 @@ class NES_TP():
         T = self.outs['T'].predict(X, **pred_kw)
         return T
 
-    def GradientR(self, x=None, **pred_kw):
+    def GradientR(self, x, **pred_kw):
         """
             Computes gradient of traveltimes w.r.t. 'xr'.
 
@@ -582,7 +650,7 @@ class NES_TP():
         G = self.outs['Gr'].predict(X, **pred_kw)
         return G
     
-    def GradientS(self, x=None, **pred_kw):
+    def GradientS(self, x, **pred_kw):
         """
             Computes gradient of traveltimes w.r.t. 'xs'.
 
@@ -597,7 +665,7 @@ class NES_TP():
         G = self.outs['Gs'].predict(X, **pred_kw)
         return G
         
-    def VelocityR(self, x=None, **pred_kw):
+    def VelocityR(self, x, **pred_kw):
         """
             Predicted velocity at 'xr'.
 
@@ -611,7 +679,7 @@ class NES_TP():
         G = self.GradientR(x=x, **pred_kw)
         return 1 / np.linalg.norm(G, axis=-1)
         
-    def VelocityS(self, x=None, **pred_kw):
+    def VelocityS(self, x, **pred_kw):
         """
             Predicted velocity at 'xs'.
 
@@ -625,7 +693,7 @@ class NES_TP():
         G = self.GradientS(x=x, **pred_kw)
         return 1 / np.linalg.norm(G, axis=-1)
 
-    def HessianR(self, x=None, **pred_kw):
+    def HessianR(self, x, **pred_kw):
         """
             Computes hessians at w.r.t. 'xr'.
 
@@ -640,34 +708,54 @@ class NES_TP():
         H = self.outs['HTr'].predict(X, **pred_kw)
         return H
 
-    def train_inputs(self, x=None):
+    def HessianS(self, x, **pred_kw):
+        """
+            Computes hessians at w.r.t. 'xs'.
+
+            Arguments:
+                x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
+                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+
+            Returns:
+                H : numpy array (N, dim*2) of floats : Hessians w.r.t. 'xs' in a form (tau_xx, tau_xy, tau_xz, tau_yy, tau_yz, tau_zz).
+        """
+        X = self.predict_inputs(x, 'HTs')
+        H = self.outs['HTs'].predict(X, **pred_kw)
+        return H
+
+    @staticmethod
+    def _prepare_inputs(model, x, velocity):
+        dim = x.shape[-1] // 2
+        xs = x[..., :dim]
+        xr = x[..., dim:]
+        X = {}
+        for kwi in model.input_names:
+            if 'vr' in kwi:
+                X['vr'] = velocity(xr).ravel()
+            elif 'vs' in kwi:
+                X['vs'] = velocity(xs).ravel()
+            else:
+                i = int(kwi[-1])
+                r = dim*('r' in kwi)
+                X[kwi] = x[..., r + i].ravel()
+        return X
+
+    def train_inputs(self, x):
         """
             Creates dictionary of inputs for training.
 
             Arguments:
                 x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
         """
-        if x is not None:
-            self.x = x.reshape(-1, self.dim*2)
+        xs = x[..., :self.dim]
+        xr = x[..., self.dim:]
 
-        self.x_train = {}
-        r = self.xs - self.xr
-        ids = abs(r).sum(axis=-1) != 0 # removing singular point 
-        self.x = self.x[ids]
-        self.xs = self.x[..., :self.dim]
-        self.xr = self.x[..., self.dim:]
+        ids = abs(xr - xs).sum(axis=-1) != 0 # removing singular points
 
-        for kwi in self.model.input_names:
-            if 'vr' in kwi:
-                self.x_train['vr'] = self.velocity(self.xr).ravel()
-            elif 'vs' in kwi:
-                self.x_train['vs'] = self.velocity(self.xs).ravel()
-            else:
-                i = int(kwi[-1])
-                r = self.dim * ('r' in kwi)
-                self.x_train[kwi] = self.x[..., r + i]
+        self.x_train = self._prepare_inputs(self.model, x[ids], self.velocity)
+        
 
-    def predict_inputs(self, x=None, out='T'):
+    def predict_inputs(self, x, out='T'):
         """
             Creates dictionary of inputs for prediction.
 
@@ -678,39 +766,18 @@ class NES_TP():
             Returns:
                 X : dict : dictionary of inputs to be feed in a model 'out'
         """
-        if x is None:
-            x = self.x
-        else:
-            x = x.reshape(-1, self.dim*2)
-
-        xs = x[..., :self.dim]
-        xr = x[..., self.dim:]
-        X = {}
-        for kwi in self.outs[out].input_names:
-            if 'vr' in kwi:
-                X['vr'] = self.velocity(xr).ravel()
-            elif 'vs' in kwi:
-                X['vs'] = self.velocity(xs).ravel()
-            else:
-                i = int(kwi[-1])
-                r = self.dim*('r' in kwi)
-                X[kwi] = x[..., r + i]
-
-        return X
+        return self._prepare_inputs(self.outs[out], x, self.velocity)
 
     def train_outputs(self,):
         """
             Creates dictionary of output for training (target values). All target values will be zero.
         """
-        if self.x_train is None:
-            self.train_inputs()
-
         self.y_train = {}
         xi = list(self.x_train.values())[0]
         for l in self.model.output_names:
             self.y_train[l] = np.zeros(len(xi))
 
-    def compile(self, optimizer=None, loss='mae', lr=1e-3, decay=1e-4, **kwargs):
+    def compile(self, optimizer=None, loss='mae', lr=2.5e-3, decay=1e-4, **kwargs):
         """
             Compiles the neural-network model for training.
 
@@ -726,8 +793,9 @@ class NES_TP():
             optimizer = tf.optimizers.Adam(learning_rate=lr, decay=decay)
 
         self.model.compile(optimizer=optimizer, loss=loss, **kwargs)
+        self.compiled = True
 
-    def train(self, x_train=None, tol=None, **train_kw):
+    def train(self, x_train=None, tolerance=None, **train_kw):
         """
             Traines the neural-network model.
 
@@ -738,12 +806,103 @@ class NES_TP():
                               Empiric dependence 'RMAE = C exp(-Loss)' is used. If 'None', 'tol' is not used
                 **train_kw : keyword arguments : Arguments for 'tf.keras.models.Model.fit(**train_kw)' such as 'batch_size', 'epochs'
         """
-        if self.x_train is None:
+        if x_train is None:
+            assert self.x_train is not None, " if `x_train` is not given, `NES_OP.x_train` must be defined"
+        else:
             self.train_inputs(x_train)
+
         if self.y_train is None:
             self.train_outputs()
+        if not self.compiled:
+            self.compile()
+
+        if isinstance(tolerance, (float, tf.keras.callbacks.Callback)):
+            if isinstance(tolerance, float):
+                EarlyStopping = NES_EarlyStopping(tolerance=tolerance)
+            else:
+                EarlyStopping = tolerance
+
+            if train_kw.get('callbacks') is None:
+                train_kw['callbacks'] = [EarlyStopping]
+            else:
+                train_kw['callbacks'].append(EarlyStopping)
+
         h = self.model.fit(x=self.x_train, y=self.y_train, **train_kw)
         return h
+
+    def save(self, filepath, save_training=False):
+        """
+            Saves the current NES_OP model to `filepath` directory.
+            `save_training` is needed to continue the training from the last point,
+            it includes `optimizer state` and `training data`.
+        """
+        config = self.config
+        config['velocity'] = self.velocity
+        config['equation.config'] = self.equation.get_config()
+
+        if save_training:
+            config['x_train'] = self.x_train
+            config['optimizer.config'] = self.model.optimizer.get_config()
+            config['optimizer.weights'] = self.model.optimizer.get_weights()
+            config['loss'] = self.model.loss
+
+        # makedir
+        pathlib.Path(filepath).mkdir(parents=True, exist_ok=True)
+        filename = filepath.split('/')[-1].split('.')[0]
+
+        # configuration
+        with open(filepath + f'/{filename}_config', 'wb') as f: 
+            pickle.dump(config, f)
+
+        # weights
+        self.outs['T'].save_weights(filepath + f'/{filename}_weights.h5', overwrite=True)
+
+    @staticmethod
+    def load(filepath):
+        """
+            Creates an NES_TP instance according to the configuration 
+            and pretrained_weights in `filepath`
+
+            Returns:
+                NES_TP : NES_TP instance 
+        """
+        training_saved = False
+        filename = filepath.split('/')[-1].split('.')[0]
+        # Importing configuration data
+        with open(filepath + f'/{filename}_config', 'rb') as f: 
+            config = pickle.load(f)
+
+        eikonal = IsoEikonal.from_config(config.pop('equation.config'))
+
+        # Creating an NES_TP instance according to the configuration
+        NES_TP_instance = NES_TP(velocity=config.pop('velocity'), 
+                                 eikonal=eikonal)
+        NES_TP_instance.losses = config.pop('losses')
+
+        # Loading optimizer state if available
+        if config.get('optimizer.config') is not None:
+            training_saved = True
+            NES_TP_instance.x_train = config.pop('x_train')
+            opt_config = config.pop('optimizer.config')
+            opt_weights = config.pop('optimizer.weights')
+            loss = config.pop('loss')
+            
+        NES_TP_instance.build_model(**config)
+
+        # Loading pretrained weights according to the topology
+        NES_TP_instance.outs['T'].load_weights(filepath + f'/{filename}_weights.h5', 
+                                                by_name=False)
+
+        if training_saved:
+            optimizer = tf.keras.optimizers.get(opt_config['name']).from_config(opt_config)
+            optimizer._create_all_weights(NES_TP_instance.model.trainable_variables)
+            optimizer.set_weights(opt_weights)
+            NES_TP_instance.compile(optimizer=optimizer, loss=loss)
+            print('Model loaded and compiled')
+        else:
+            print('Model loaded and not compiled')
+
+        return NES_TP_instance
 
     def train_evolution(self, max_epochs=1000, step_epochs=10, x_train=None, 
                         tqdm=None, T_test_set=None, t_evol=False, 
