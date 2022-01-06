@@ -103,6 +103,8 @@ class VerticalGradient:
     a = None
     xmin = None
     xmax = None
+    min = None
+    max = None
 
     def __init__(self, v0, a, xmin=None, xmax=None):
         """ v0 : initial velocity ar z=0
@@ -116,7 +118,19 @@ class VerticalGradient:
     def __call__(self, X):
         """ Computes the velocity value at 'X', where X is (...., dim), and z=X[..., -1]
         """
-        return self.v0 + self.a * X[..., -1]
+        if self.xmin is None:
+            self.xmin = X.reshape(-1, X.shape[-1]).min()
+        if self.xmax is None:
+            self.xmax = X.reshape(-1, X.shape[-1]).max()
+
+        V = self.v0 + self.a * X[..., -1]
+
+        if self.min is None:
+            self.min = V.min()
+        if self.max is None:
+            self.max = V.max()
+
+        return V
 
     def gradient(self, X):
         """ Computes the gradient of velocity value at 'X'
@@ -152,10 +166,10 @@ class LocAnomaly:
     """
     mus = None
     sigmas = None
-    vmin = None
-    vmax = None
     xmin = None
     xmax = None
+    min = None
+    max = None
 
     def __init__(self, vmin, vmax, mus, sigmas, xmin=None, xmax=None):
         """ vmin : minimal velocity
@@ -167,22 +181,27 @@ class LocAnomaly:
         """
         self.mus = mus.reshape(1, -1)
         self.sigmas = sigmas.reshape(1, -1)
-        self.vmin = vmin
-        self.vmax = vmax
+        self.min = vmin
+        self.max = vmax
         self.xmin = xmin
         self.xmax = xmax
 
     def __call__(self, X):
         """ Computes the velocity value at 'X'
         """
-        V = (self.vmax - self.vmin) 
+        if self.xmin is None:
+            self.xmin = X.reshape(-1, X.shape[-1]).min()
+        if self.xmax is None:
+            self.xmax = X.reshape(-1, X.shape[-1]).max()
+
+        V = (self.max - self.min) 
         V *= np.exp(- ((X - self.mus)**2 / 2 / self.sigmas**2).sum(axis=-1))
-        return V + self.vmin
+        return V + self.min
 
     def gradient(self, X):
         """ Computes the analytical gradient of velocity at 'X'
         """
-        return (self.__call__(X) - self.vmin)[..., None] * (self.mus - X) / self.sigmas
+        return (self.__call__(X) - self.min)[..., None] * (self.mus - X) / self.sigmas
 
 def Marmousi(smooth=None, section=None):
     """
@@ -197,7 +216,6 @@ def Marmousi(smooth=None, section=None):
         Return:
             Vel : instance of 'NES.Interpolator' for Marmousi model in 'km/s' units
     """
-    # V = np.load('/data/Marmousi_Pwave_smooth_12_5m.npy') / 1000.0
     f = pkg_resources.resource_stream(__name__, "data//Marmousi_Pwave_smooth_12_5m.npy")
     V = np.load(f) / 1000.0
     if section is not None:
