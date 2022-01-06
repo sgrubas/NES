@@ -6,8 +6,7 @@ from tensorflow.keras.models import Model
 from .baseLayers import DenseBody, Diff, SourceLoc, NES_EarlyStopping
 from .eikonalLayers import IsoEikonal
 from .misc import Interpolator
-import pickle
-import pathlib
+import pickle, pathlib, shutil
 
 ###############################################################################
                     ### ONE POINT NEURAL EIKONAL SOLVER ###
@@ -55,6 +54,7 @@ class NES_OP:
         self.y_train = None     # output training data
         self.compiled = False   # compilation status
         self.config = {}        # config data of NN model to be reproducible
+        self.gradient_enhanced = False # gradient of equation is added to loss
     
     def build_model(self, nl=4, nu=50, act='ad-gauss-1', out_act='ad-sigmoid-1', 
                     input_scale=True, factored=True, out_vscale=True, **kwargs):       
@@ -120,21 +120,16 @@ class NES_OP:
         # Final Traveltime Model
         Tm = Model(inputs=xr_list, outputs=T)
 
-        # Velocity input
-        v = L.Input(shape=(1,), name='v')
-
-        # Eikonal equation
+        # Gradient
         dT_list = Diff(name='gradients')([T, xr_list])
         dT = L.Concatenate(name='Gradient', axis=-1)(dT_list)
         Gm = Model(inputs=xr_list, outputs=dT)
 
+        # Eikonal equation
+        v = L.Input(shape=(1,), name='v') # Velocity input
         Eq = self.equation(dT_list, v)
         Em = Model(inputs=xr_list + [v], outputs=Eq)
 
-        # Trainable model
-        self.model = Model(inputs=xr_list + [v], outputs=Eq)
-
-        ### Other callable outputs 
         # Velocity
         V = L.Lambda(lambda z: 1 / tf.norm(z, axis=-1, keepdims=True), name='Velocity')(dT)
         Vm = Model(inputs=xr_list, outputs=V)
@@ -148,8 +143,23 @@ class NES_OP:
         LT = L.Lambda(lambda z: tf.reduce_sum(z, axis=-1, keepdims=True), name='Laplacian')(d2T)
         Lm = Model(inputs=xr_list, outputs=LT)
 
+        # Gradient enhanced
+        dv = L.Input(shape=(self.dim,), name='dv') # Velocity gradient input
+        dV = Diff(name='Velocity_gradient')([V, xr])
+        dEq = L.Lambda(lambda z: z[0] / z[1] + z[2] / z[3], name='Eikonal_gradient')([dv, V, v, dV])
+        gEq = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='Eikonal_enhanced')(dEq)
+        gEm = Model(inputs=xr_list + [v, dv], outputs=gEq)
+
         # All callable models
-        self.outs = dict(T=Tm, E=Em, G=Gm, V=Vm, L=Lm)
+        self.outs = dict(T=Tm, E=Em, G=Gm, V=Vm, L=Lm, gE=gEm)
+
+        # Trainable model
+        inputs = xr_list + [v]
+        outputs = Eq
+        if self.gradient_enhanced:
+            inputs += [dv]
+            outputs = [Eq, gEq]
+        self.model = Model(inputs=inputs, outputs=outputs)
 
     def Traveltime(self, xr, **pred_kw):
         """
@@ -217,9 +227,12 @@ class NES_OP:
             Creates dictionary according to the input names of model
         """
         X = {}
+        dim = velocity.dim
         for kwi in model.input_names:
-            if 'v' in kwi:
-                X['v'] = velocity(x).ravel()
+            if kwi == 'v':
+                X[kwi] = velocity(x).ravel()
+            elif kwi == 'dv':
+                X[kwi] = velocity.gradient(x).reshape(-1, dim)
             else:
                 X[kwi] = x[..., int(kwi[-1])].ravel()
         return X
@@ -316,77 +329,97 @@ class NES_OP:
         h = self.model.fit(x=self.x_train, y=self.y_train, **train_kw)
         return h
 
-    def save(self, filepath, save_training=False):
+    def save(self, filepath, save_optimizer=False, training_data=False):
         """
             Saves the current NES_OP model to `filepath` directory.
-            `save_training` is needed to continue the training from the last point,
-            it includes `optimizer state` and `training data`.
+            `save_optimizer` saves the optimizer state to continue the training from the last point,
+            `training_data` saves the last training set used for training.
         """
         config = self.config
         config['velocity'] = self.velocity
         config['xs'] = self.xs
         config['equation.config'] = self.equation.get_config()
 
-        if save_training:
-            config['x_train'] = self.x_train
-            config['optimizer.config'] = self.model.optimizer.get_config()
-            config['optimizer.weights'] = self.model.optimizer.get_weights()
-            config['loss'] = self.model.loss
-
         # makedir
-        pathlib.Path(filepath).mkdir(parents=True, exist_ok=True)
+        if pathlib.Path(filepath).is_dir():
+            shutil.rmtree(filepath)
+        pathlib.Path(filepath).mkdir(parents=True, exist_ok=False)
         filename = filepath.split('/')[-1].split('.')[0]
 
-        # configuration
-        with open(filepath + f'/{filename}_config', 'wb') as f: 
+        # Model configuration
+        config_filename = filepath + f'/{filename}_config'
+        with open(config_filename, 'wb') as f: 
             pickle.dump(config, f)
-        # weights
-        self.outs['T'].save_weights(filepath + f'/{filename}_weights.h5')
+
+        # Model weights
+        weights_filename = filepath + f'/{filename}_weights.h5'
+        self.outs['T'].save_weights(weights_filename)
+
+        # Optimizer state
+        if save_optimizer:
+            opt_config = {}
+            opt_config['optimizer.config'] = self.model.optimizer.get_config()
+            opt_config['optimizer.weights'] = self.model.optimizer.get_weights()
+            opt_config['loss'] = self.model.loss
+            opt_filename = filepath + f'/{filename}_optimizer'
+            with open(opt_filename, 'wb') as f: 
+                pickle.dump(opt_config, f)
+
+        # Training set of collocation points
+        if training_data:
+            data_filename = filepath + f'/{filename}_train_data'
+            with open(data_filename, 'wb') as f: 
+                pickle.dump(self.x_train, f)
 
     @staticmethod
     def load(filepath):
         """
             Creates an NES_OP instance according to the configuration 
             and pretrained_weights in `filepath`
+            
+            Arguments:
+                filepath : directory with the saved model
 
             Returns:
-                NES_OP : NES_OP instance 
+                NES_OP instance 
         """
-        training_saved = False
         filename = filepath.split('/')[-1].split('.')[0]
+
         # Importing configuration data
-        with open(filepath + f'/{filename}_config', 'rb') as f: 
+        config_filename = filepath + f'/{filename}_config'
+        with open(config_filename, 'rb') as f: 
             config = pickle.load(f)
 
+        # Loading configuration
         eikonal = IsoEikonal.from_config(config.pop('equation.config'))
-
-        # Creating an NES_OP instance according to the configuration
         NES_OP_instance = NES_OP(xs=config.pop('xs'), 
                                  velocity=config.pop('velocity'), 
                                  eikonal=eikonal)
-
-        # Loading optimizer state if available
-        if config.get('optimizer.config') is not None:
-            training_saved = True
-            NES_OP_instance.x_train = config.pop('x_train')
-            opt_config = config.pop('optimizer.config')
-            opt_weights = config.pop('optimizer.weights')
-            loss = config.pop('loss')
-            
         NES_OP_instance.build_model(**config)
 
-        # Loading pretrained weights according to the topology
-        NES_OP_instance.outs['T'].load_weights(filepath + f'/{filename}_weights.h5', 
-                                                by_name=False)
+        # Loading weights
+        weights_filename = filepath + f'/{filename}_weights.h5'
+        NES_OP_instance.outs['T'].load_weights(weights_filename, by_name=False)
+        print('Model loaded')
 
-        if training_saved:
-            optimizer = tf.keras.optimizers.get(opt_config['name']).from_config(opt_config)
+        # Loading optimizer state if available
+        opt_filename = filepath + f'/{filename}_optimizer'
+        if pathlib.Path(opt_filename).is_file():
+            with open(opt_filename, 'rb') as f: 
+                opt_config = pickle.load(f)
+            optimizer = tf.keras.optimizers.get(opt_config['optimizer.config']['name'])
+            optimizer = optimizer.from_config(opt_config['optimizer.config'])
             optimizer._create_all_weights(NES_OP_instance.model.trainable_variables)
-            optimizer.set_weights(opt_weights)
-            NES_OP_instance.compile(optimizer=optimizer, loss=loss)
-            print('Model loaded and compiled')
-        else:
-            print('Model loaded and not compiled')
+            optimizer.set_weights(opt_config['optimizer.weights'])
+            NES_OP_instance.compile(optimizer=optimizer, loss=opt_config['loss'])
+            print('Model compiled with saved optimizer')
+
+        # Loading training data if available
+        data_filename = filepath + f'/{filename}_train_data'
+        if pathlib.Path(data_filename).is_file():
+            with open(data_filename, 'rb') as f: 
+                NES_OP_instance.x_train = pickle.load(f)
+            print('Last training data loaded: see NES_OP.x_train')
 
         return NES_OP_instance
 
@@ -539,17 +572,17 @@ class NES_TP:
 
         ## Input for Source part
         xs_list = [L.Input(shape=(1,), name='xs' + str(i)) for i in range(self.dim)]
-        xs = L.Concatenate(axis=-1)(xs_list)
+        xs = L.Concatenate(name='xs', axis=-1)(xs_list)
 
         ## Input for Receiver part
         xr_list = [L.Input(shape=(1,), name='xr' + str(i)) for i in range(self.dim)]
-        xr = L.Concatenate(axis=-1)(xr_list)
+        xr = L.Concatenate(name='xr', axis=-1)(xr_list)
         
         # Input list
         inputs = xs_list + xr_list
 
         # Trainable body
-        X = L.Concatenate(axis=-1)([xs, xr])
+        X = L.Concatenate(name='x', axis=-1)([xs, xr])
         if input_scale:
             X_sc = Rescaling(1 / self.xscale, name='X_scaling')(X)
         else:
@@ -830,77 +863,108 @@ class NES_TP:
         h = self.model.fit(x=self.x_train, y=self.y_train, **train_kw)
         return h
 
-    def save(self, filepath, save_training=False):
+    def save(self, filepath, save_optimizer=False, training_data=False):
         """
             Saves the current NES_OP model to `filepath` directory.
-            `save_training` is needed to continue the training from the last point,
-            it includes `optimizer state` and `training data`.
+            `save_optimizer` saves the optimizer state to continue the training from the last point,
+            `training_data` saves the last training set used for training.
         """
         config = self.config
         config['velocity'] = self.velocity
         config['equation.config'] = self.equation.get_config()
 
-        if save_training:
-            config['x_train'] = self.x_train
-            config['optimizer.config'] = self.model.optimizer.get_config()
-            config['optimizer.weights'] = self.model.optimizer.get_weights()
-            config['loss'] = self.model.loss
-
         # makedir
-        pathlib.Path(filepath).mkdir(parents=True, exist_ok=True)
+        if pathlib.Path(filepath).is_dir():
+            shutil.rmtree(filepath)
+        pathlib.Path(filepath).mkdir(parents=True, exist_ok=False)
         filename = filepath.split('/')[-1].split('.')[0]
 
-        # configuration
-        with open(filepath + f'/{filename}_config', 'wb') as f: 
+        # Model configuration
+        config_filename = filepath + f'/{filename}_config'
+        with open(config_filename, 'wb') as f: 
             pickle.dump(config, f)
 
-        # weights
-        self.outs['T'].save_weights(filepath + f'/{filename}_weights.h5', overwrite=True)
+        # Model weights
+        weights_filename = filepath + f'/{filename}_weights'
+        try:
+            # topology may have multiple weights 
+            # with the same names if `reciprocity=True`
+            self.outs['T'].save_weights(weights_filename + '.h5')
+        except:
+            weights = self.outs['T'].get_weights()
+            with open(weights_filename, 'wb') as f: 
+                pickle.dump(weights, f)
+
+        # Optimizer state
+        if save_optimizer:
+            opt_config = {}
+            opt_config['optimizer.config'] = self.model.optimizer.get_config()
+            opt_config['optimizer.weights'] = self.model.optimizer.get_weights()
+            opt_config['loss'] = self.model.loss
+            opt_filename = filepath + f'/{filename}_optimizer'
+            with open(opt_filename, 'wb') as f: 
+                pickle.dump(opt_config, f)
+
+        # Training set of collocation points
+        if training_data:
+            data_filename = filepath + f'/{filename}_train_data'
+            with open(data_filename, 'wb') as f: 
+                pickle.dump(self.x_train, f)
 
     @staticmethod
     def load(filepath):
         """
             Creates an NES_TP instance according to the configuration 
             and pretrained_weights in `filepath`
+            
+            Arguments:
+                filepath : directory with the saved model
 
             Returns:
-                NES_TP : NES_TP instance 
+                NES_TP instance 
         """
-        training_saved = False
         filename = filepath.split('/')[-1].split('.')[0]
+
         # Importing configuration data
-        with open(filepath + f'/{filename}_config', 'rb') as f: 
+        config_filename = filepath + f'/{filename}_config'
+        with open(config_filename, 'rb') as f: 
             config = pickle.load(f)
 
+        # Loading configuration
         eikonal = IsoEikonal.from_config(config.pop('equation.config'))
-
-        # Creating an NES_TP instance according to the configuration
         NES_TP_instance = NES_TP(velocity=config.pop('velocity'), 
                                  eikonal=eikonal)
         NES_TP_instance.losses = config.pop('losses')
+        NES_TP_instance.build_model(**config)
+        
+        # Loading weights
+        weights_filename = filepath + f'/{filename}_weights'
+        try:
+            NES_TP_instance.outs['T'].load_weights(weights_filename + '.h5', by_name=False)
+        except:
+            with open(weights_filename, 'rb') as f: 
+                weights = pickle.load(f)
+            NES_TP_instance.outs['T'].set_weights(weights)
+        print('Model loaded')
 
         # Loading optimizer state if available
-        if config.get('optimizer.config') is not None:
-            training_saved = True
-            NES_TP_instance.x_train = config.pop('x_train')
-            opt_config = config.pop('optimizer.config')
-            opt_weights = config.pop('optimizer.weights')
-            loss = config.pop('loss')
-            
-        NES_TP_instance.build_model(**config)
-
-        # Loading pretrained weights according to the topology
-        NES_TP_instance.outs['T'].load_weights(filepath + f'/{filename}_weights.h5', 
-                                                by_name=False)
-
-        if training_saved:
-            optimizer = tf.keras.optimizers.get(opt_config['name']).from_config(opt_config)
+        opt_filename = filepath + f'/{filename}_optimizer'
+        if pathlib.Path(opt_filename).is_file():
+            with open(opt_filename, 'rb') as f: 
+                opt_config = pickle.load(f)
+            optimizer = tf.keras.optimizers.get(opt_config['optimizer.config']['name'])
+            optimizer = optimizer.from_config(opt_config['optimizer.config'])
             optimizer._create_all_weights(NES_TP_instance.model.trainable_variables)
-            optimizer.set_weights(opt_weights)
-            NES_TP_instance.compile(optimizer=optimizer, loss=loss)
-            print('Model loaded and compiled')
-        else:
-            print('Model loaded and not compiled')
+            optimizer.set_weights(opt_config['optimizer.weights'])
+            NES_TP_instance.compile(optimizer=optimizer, loss=opt_config['loss'])
+            print('Model compiled with saved optimizer')
+
+        # Loading training data if available
+        data_filename = filepath + f'/{filename}_train_data'
+        if pathlib.Path(data_filename).is_file():
+            with open(data_filename, 'rb') as f: 
+                NES_TP_instance.x_train = pickle.load(f)
+            print('Last training data loaded: see NES_TP.x_train')
 
         return NES_TP_instance
 
