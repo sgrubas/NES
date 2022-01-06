@@ -3,6 +3,8 @@ import numpy as np
 import tensorflow.keras.layers as L
 from tensorflow.keras.models import Model
 from tensorflow.keras import initializers
+from tensorflow.keras.callbacks import EarlyStopping as EarlyStoppingCallback
+from tensorflow.python.platform import tf_logging as logging
 
 
 #######################################################################
@@ -142,9 +144,6 @@ class LossesHolder(tf.keras.callbacks.Callback):
             self.logs[kw].append(v)
 
 
-def EarlyStopping(tolerance):
-    pass
-
 class Initializer(initializers.Initializer):
     """
         Initializer that converts 'numpy array' to 'tf.Tensor'
@@ -162,12 +161,11 @@ class Initializer(initializers.Initializer):
 
 class SourceLoc(L.Layer):
     """
-    Class for Source location using tf.keras.layers.Layer.
+        Class for Source location using tf.keras.layers.Layer.
+
+        xs : source location [x, y, z]
     """
     def __init__(self, xs, **kwargs):
-        """
-        xs : source location [x, y, z]
-        """
         super(SourceLoc, self).__init__(**kwargs)
         self.xs = self.add_weight(name='xs', shape=(len(xs),),
                                   trainable=False, 
@@ -180,3 +178,82 @@ class SourceLoc(L.Layer):
         config = super(SourceLoc, self).get_config()
         config.update({"xs": self.xs.numpy()})
         return config
+
+
+class NES_EarlyStopping(tf.keras.callbacks.Callback):
+    """Stop training when a monitored metric has reached a tolerance value.
+    Assuming the goal of a training is to minimize the loss. A
+    `model.fit()` training loop will check at end of every epoch whether
+    the loss reached a tolerance value, considering the `patience`. 
+    Once it's found lower than `tolerance`,
+    `model.stop_training` is marked True and the training terminates.
+    The quantity to be monitored needs to be available in `logs` dict and
+    can 'loss' or 'val_loss' only.
+
+    Args:
+    monitor: Quantity to be monitored ('loss' or 'val_loss'). By default 'loss'
+    tolerance: The baseline value of RMAE of the solution.
+            Training will stop if the `conversion(monitor) < tolerance'. 
+            By default 1e-2 (1 %).
+    conversion: Callable function that maps `monitor` to units comparable with `tolerance`.
+            It is empirical equation that defines the dependence between loss and RMAE.
+            By default conversion(x) = 1.1 * exp(x)
+    patience: Number of epochs `conversion(monitor)` must be lower than `tolerance` to be stopped.
+    verbose: verbosity mode (0 or 1).
+    """
+
+    def __init__(self,
+               monitor='loss',
+               tolerance=0,
+               patience=10,
+               verbose=1,
+               conversion=lambda x: x * 10**(-0.16),
+               ):
+        super(NES_EarlyStopping, self).__init__()
+        assert monitor == 'loss' or monitor == 'val_loss', \
+        "Only 'loss' and 'val_loss' are supported for monitor metric"
+
+        self.monitor = monitor
+        self.tolerance = tolerance
+        self.patience = patience
+        self.verbose = verbose
+        self.conversion = conversion
+
+        self.wait = 0
+        self.stopped_epoch = 0
+
+    def on_train_begin(self, logs=None):
+        # Allow instances to be re-used
+        self.wait = 0
+        self.stopped_epoch = 0
+
+    def on_epoch_end(self, epoch, logs=None):
+        current = self.get_monitor_value(logs)
+        if current is None:
+            return
+
+        if np.less(self.conversion(current), self.tolerance):
+            self.wait += 1
+
+        # Only check after the first epoch.
+        if self.wait >= self.patience and epoch > 0:
+            self.monitor_last = current
+            self.tolerance_last = self.conversion(current)
+            self.stopped_epoch = epoch
+            self.model.stop_training = True
+
+    def on_train_end(self, logs=None):
+        if self.stopped_epoch > 0 and self.verbose > 0:
+            print('Epoch %05d: early stopping' % (self.stopped_epoch + 1))
+            print(f'{self.monitor}: {self.monitor_last:.5f}')
+            print(f'Approximate RMAE of solution: {100*self.tolerance_last:.5f} %')
+
+    def get_monitor_value(self, logs):
+        logs = logs or {}
+        monitor_value = logs.get(self.monitor)
+        if monitor_value is None:
+          logging.warning('Early stopping conditioned on metric `%s` '
+                          'which is not available. Available metrics are: %s',
+                          self.monitor, ','.join(list(logs.keys())))
+        return monitor_value
+
