@@ -105,6 +105,7 @@ class VerticalGradient:
     xmax = None
     min = None
     max = None
+    dim = None
 
     def __init__(self, v0, a, xmin=None, xmax=None):
         """ v0 : initial velocity ar z=0
@@ -119,9 +120,11 @@ class VerticalGradient:
         """ Computes the velocity value at 'X', where X is (...., dim), and z=X[..., -1]
         """
         if self.xmin is None:
-            self.xmin = X.reshape(-1, X.shape[-1]).min()
+            self.xmin = X.reshape(-1, X.shape[-1]).min(axis=0)
         if self.xmax is None:
-            self.xmax = X.reshape(-1, X.shape[-1]).max()
+            self.xmax = X.reshape(-1, X.shape[-1]).max(axis=0)
+        if self.dim is None:
+            self.dim = X.shape[-1]
 
         V = self.v0 + self.a * X[..., -1]
 
@@ -170,6 +173,7 @@ class LocAnomaly:
     xmax = None
     min = None
     max = None
+    dim = None
 
     def __init__(self, vmin, vmax, mus, sigmas, xmin=None, xmax=None):
         """ vmin : minimal velocity
@@ -185,14 +189,15 @@ class LocAnomaly:
         self.max = vmax
         self.xmin = xmin
         self.xmax = xmax
+        self.dim = len(mus)
 
     def __call__(self, X):
         """ Computes the velocity value at 'X'
         """
         if self.xmin is None:
-            self.xmin = X.reshape(-1, X.shape[-1]).min()
+            self.xmin = X.reshape(-1, X.shape[-1]).min(axis=0)
         if self.xmax is None:
-            self.xmax = X.reshape(-1, X.shape[-1]).max()
+            self.xmax = X.reshape(-1, X.shape[-1]).max(axis=0)
 
         V = (self.max - self.min) 
         V *= np.exp(- ((X - self.mus)**2 / 2 / self.sigmas**2).sum(axis=-1))
