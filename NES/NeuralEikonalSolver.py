@@ -54,7 +54,6 @@ class NES_OP:
         self.y_train = None     # output training data
         self.compiled = False   # compilation status
         self.config = {}        # config data of NN model to be reproducible
-        self.gradient_enhanced = False # gradient of equation is added to loss
     
     def build_model(self, nl=4, nu=50, act='ad-gauss-1', out_act='ad-sigmoid-1', 
                     input_scale=True, factored=True, out_vscale=True, **kwargs):       
@@ -143,22 +142,12 @@ class NES_OP:
         LT = L.Lambda(lambda z: tf.reduce_sum(z, axis=-1, keepdims=True), name='Laplacian')(d2T)
         Lm = Model(inputs=xr_list, outputs=LT)
 
-        # Gradient enhanced
-        dv = L.Input(shape=(self.dim,), name='dv') # Velocity gradient input
-        dV = Diff(name='Velocity_gradient')([V, xr])
-        dEq = L.Lambda(lambda z: z[0] / z[1] + z[2] / z[3], name='Eikonal_gradient')([dv, V, v, dV])
-        gEq = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='Eikonal_enhanced')(dEq)
-        gEm = Model(inputs=xr_list + [v, dv], outputs=gEq)
-
         # All callable models
         self.outs = dict(T=Tm, E=Em, G=Gm, V=Vm, L=Lm, gE=gEm)
 
         # Trainable model
         inputs = xr_list + [v]
         outputs = Eq
-        if self.gradient_enhanced:
-            inputs += [dv]
-            outputs = [Eq, gEq]
         self.model = Model(inputs=inputs, outputs=outputs)
 
     def Traveltime(self, xr, **pred_kw):
@@ -231,8 +220,6 @@ class NES_OP:
         for kwi in model.input_names:
             if kwi == 'v':
                 X[kwi] = velocity(x).ravel()
-            elif kwi == 'dv':
-                X[kwi] = velocity.gradient(x).reshape(-1, dim)
             else:
                 X[kwi] = x[..., int(kwi[-1])].ravel()
         return X
@@ -400,7 +387,7 @@ class NES_OP:
         # Loading weights
         weights_filename = filepath + f'/{filename}_weights.h5'
         NES_OP_instance.outs['T'].load_weights(weights_filename, by_name=False)
-        print('Model loaded')
+        print(f'Loaded model from "{filepath}"')
 
         # Loading optimizer state if available
         opt_filename = filepath + f'/{filename}_optimizer'
@@ -412,14 +399,14 @@ class NES_OP:
             optimizer._create_all_weights(NES_OP_instance.model.trainable_variables)
             optimizer.set_weights(opt_config['optimizer.weights'])
             NES_OP_instance.compile(optimizer=optimizer, loss=opt_config['loss'])
-            print('Model compiled with saved optimizer')
+            print('Compiled the model with saved optimizer')
 
         # Loading training data if available
         data_filename = filepath + f'/{filename}_train_data'
         if pathlib.Path(data_filename).is_file():
             with open(data_filename, 'rb') as f: 
                 NES_OP_instance.x_train = pickle.load(f)
-            print('Last training data loaded: see NES_OP.x_train')
+            print('Loaded last training data: see NES_OP.x_train')
 
         return NES_OP_instance
 
@@ -945,7 +932,7 @@ class NES_TP:
             with open(weights_filename, 'rb') as f: 
                 weights = pickle.load(f)
             NES_TP_instance.outs['T'].set_weights(weights)
-        print('Model loaded')
+        print(f'Loaded model from "{filepath}"')
 
         # Loading optimizer state if available
         opt_filename = filepath + f'/{filename}_optimizer'
@@ -957,14 +944,14 @@ class NES_TP:
             optimizer._create_all_weights(NES_TP_instance.model.trainable_variables)
             optimizer.set_weights(opt_config['optimizer.weights'])
             NES_TP_instance.compile(optimizer=optimizer, loss=opt_config['loss'])
-            print('Model compiled with saved optimizer')
+            print('Compiled the model with saved optimizer')
 
         # Loading training data if available
         data_filename = filepath + f'/{filename}_train_data'
         if pathlib.Path(data_filename).is_file():
             with open(data_filename, 'rb') as f: 
                 NES_TP_instance.x_train = pickle.load(f)
-            print('Last training data loaded: see NES_TP.x_train')
+            print('Loaded last training data: see NES_OP.x_train')
 
         return NES_TP_instance
 
