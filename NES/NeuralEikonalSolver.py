@@ -154,68 +154,60 @@ class NES_OP:
         outputs = Eq
         self.model = Model(inputs=inputs, outputs=outputs)
 
-    def Traveltime(self, xr, **pred_kw):
+    def Traveltime(self, xr, **kwargs):
         """
             Computes traveltimes.
 
             Arguments:
                 xr : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
 
             Returns:
                 T : numpy array (N,) of floats : Traveltimes from the source 'NES_OP.xs' at 'xr'
         """
-        X = self.predict_inputs(xr, 'T')
-        T = self.outs['T'].predict(X, **pred_kw)
-        return T
+        return self._predict(xr, 'T', **kwargs)
 
-    def Gradient(self, xr, **pred_kw):
+    def Gradient(self, xr, **kwargs):
         """
             Computes gradients - vector (tau_dx, tau_dy, tau_dz).
 
             Arguments:
                 xr : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
 
             Returns:
                 dT : numpy array (N, dim) of floats : Gradient of traveltimes from the source 'NES_OP.xs' at 'xr'
         """
-        X = self.predict_inputs(xr, 'G')
-        G = self.outs['G'].predict(X, **pred_kw)
-        return G
+        return self._predict(xr, 'G', **kwargs)
         
-    def Velocity(self, xr, **pred_kw):
+    def Velocity(self, xr, **kwargs):
         """
             Computes predicted velocity - 1 / ||( tau_dx, tau_dy, tau_dz) ||.
 
             Arguments:
                 xr : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
 
             Returns:
                 V : numpy array (N,) of floats : Predicted velocity from the source 'NES_OP.xs' at 'xr'
         """
-        X = self.predict_inputs(xr, 'V')
-        V = self.outs['V'].predict(X, **pred_kw)
-        return V
+        return self._predict(xr, 'V', **kwargs)
 
-    def Laplacian(self, xr, **pred_kw):
+    def Laplacian(self, xr, **kwargs):
         """
             Computes laplacian - tau_dxdx + tau_dydy + tau_dzdz.
 
             Arguments:
                 xr : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
 
             Returns:
                 Laplacian : numpy array (N,) of floats : Laplacian from the source 'NES_OP.xs' at 'xr'
         """        
-        X = self.predict_inputs(xr, 'L')
-        L = self.outs['L'].predict(X, **pred_kw)
-        return L
+        return self._predict(xr, 'L', **kwargs)
 
 
-    def Hessian(self, xr, **pred_kw):
+    def Hessian(self, xr, **kwargs):
         """
             Computes full Hessian in a form of:
             1D: [tau_dxdx]
@@ -224,14 +216,12 @@ class NES_OP:
 
             Arguments:
                 xr : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
 
             Returns:
                 Hessian : numpy array (N, dim*((dim - 1)/2 + 1) ) of floats : Laplacian from the source 'NES_OP.xs' at 'xr'
         """        
-        X = self.predict_inputs(xr, 'H')
-        H = self.outs['H'].predict(X, **pred_kw)
-        return H
+        return self._predict(xr, 'H', **kwargs)
 
     @staticmethod
     def _prepare_inputs(model, x, velocity):
@@ -247,6 +237,13 @@ class NES_OP:
                 X[kwi] = x[..., int(kwi[-1])].ravel()
         return X
 
+    def _predict(self, xr, out, **kwargs):
+        if kwargs.get('batch_size') is None:
+            kwargs['batch_size'] = 100000
+        X = self._prepare_inputs(self.outs[out], xr, self.velocity)
+        P = self.outs[out].predict(X, **kwargs).reshape(*xr.shape[:-1], -1).squeeze()
+        return P
+
     def train_inputs(self, xr):
         """
             Creates dictionary of inputs for training. Removes singular points (xr=xs)
@@ -257,20 +254,6 @@ class NES_OP:
 
         ids = abs(xr - self.xs[None, ...]).sum(axis=-1) != 0 # removing singular point
         self.x_train = self._prepare_inputs(self.model, xr[ids], self.velocity)
-    
-
-    def predict_inputs(self, xr, out='T'):
-        """
-            Creates dictionary of inputs for prediction for different output models `out`.
-
-            Arguments:
-                xr : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension
-                out : str : For which model inputs should be prepared. See available in 'NES_OP.outs.keys()'
-
-            Returns:
-                X : dict : dictionary of inputs to be feed in a model 'out'
-        """
-        return self._prepare_inputs(self.outs[out], xr, self.velocity)
 
     def train_outputs(self,):
         """
@@ -676,110 +659,100 @@ class NES_TP:
         self.outs = dict(T=Tm, Er=Emr, Es=Ems, Gr=Gr, Gs=Gs, 
                          Lr=Lrm, Ls=Lsm, Hr=Hrm, Hs=Hsm)
 
-    def Traveltime(self, x, **pred_kw):
+    def Traveltime(self, x, **kwargs):
         """
             Computes traveltimes.
 
             Arguments:
                 x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
 
             Returns:
                 T : numpy array (N,) of floats : Traveltimes
         """
-        X = self.predict_inputs(x, 'T')
-        T = self.outs['T'].predict(X, **pred_kw)
-        return T
+        return self._predict(x, 'T', **kwargs)
 
-    def GradientR(self, x, **pred_kw):
+    def GradientR(self, x, **kwargs):
         """
             Computes gradient of traveltimes w.r.t. 'xr'.
 
             Arguments:
                 x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
 
             Returns:
                 dTr : numpy array (N, dim) of floats : gradient of traveltimes w.r.t. 'xr'
         """
-        X = self.predict_inputs(x, 'Gr')
-        G = self.outs['Gr'].predict(X, **pred_kw)
-        return G
+        return self._predict(x, 'Gr', **kwargs)
     
-    def GradientS(self, x, **pred_kw):
+    def GradientS(self, x, **kwargs):
         """
             Computes gradient of traveltimes w.r.t. 'xs'.
 
             Arguments:
                 x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
 
             Returns:
                 dTs : numpy array (N, dim) of floats : gradient of traveltimes w.r.t. 'xs'
         """
-        X = self.predict_inputs(x, 'Gs')
-        G = self.outs['Gs'].predict(X, **pred_kw)
-        return G
+        return self._predict(x, 'Gs', **kwargs)
         
-    def VelocityR(self, x, **pred_kw):
+    def VelocityR(self, x, **kwargs):
         """
             Predicted velocity at 'xr'.
 
             Arguments:
                 x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
 
             Returns:
                 Vr : numpy array (N,) of floats : Predicted velocity at 'xr'.
         """
-        G = self.GradientR(x=x, **pred_kw)
+        G = self.GradientR(x=x, **kwargs)
         return 1 / np.linalg.norm(G, axis=-1)
         
-    def VelocityS(self, x, **pred_kw):
+    def VelocityS(self, x, **kwargs):
         """
             Predicted velocity at 'xs'.
 
             Arguments:
                 x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
 
             Returns:
                 Vs : numpy array (N,) of floats : Predicted velocity at 'xs'.
         """
-        G = self.GradientS(x=x, **pred_kw)
+        G = self.GradientS(x=x, **kwargs)
         return 1 / np.linalg.norm(G, axis=-1)
 
-    def LaplacianR(self, x, **pred_kw):
+    def LaplacianR(self, x, **kwargs):
         """
             Computes laplacian w.r.t. 'xr' - tau_dxdx + tau_dydy + tau_dzdz.
 
             Arguments:
                 x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
 
             Returns:
                 Laplacian : numpy array (N,) of floats
         """        
-        X = self.predict_inputs(x, 'Lr')
-        L = self.outs['Lr'].predict(X, **pred_kw)
-        return L
+        return self._predict(x, 'Lr', **kwargs)
 
-    def LaplacianS(self, x, **pred_kw):
+    def LaplacianS(self, x, **kwargs):
         """
             Computes laplacian w.r.t. 'xs' - tau_dxdx + tau_dydy + tau_dzdz.
 
             Arguments:
                 x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
 
             Returns:
                 Laplacian : numpy array (N,) of floats
         """        
-        X = self.predict_inputs(x, 'Ls')
-        L = self.outs['Ls'].predict(X, **pred_kw)
-        return L
+        return self._predict(x, 'Ls', **kwargs)
 
-    def HessianR(self, x, **pred_kw):
+    def HessianR(self, x, **kwargs):
         """
             Computes full Hessian w.r.t. 'xr' in a form of:
             1D: [tau_dxdx]
@@ -788,16 +761,14 @@ class NES_TP:
 
             Arguments:
                 x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
 
             Returns:
                 Hessian : numpy array (N, dim*((dim - 1)/2 + 1) ) of floats
         """        
-        X = self.predict_inputs(x, 'Hr')
-        H = self.outs['Hr'].predict(X, **pred_kw)
-        return H
+        return self._predict(x, 'Hr', **kwargs)
 
-    def HessianS(self, x, **pred_kw):
+    def HessianS(self, x, **kwargs):
         """
             Computes full Hessian w.r.t. 'xs' in a form of:
             1D: [tau_dxdx]
@@ -806,16 +777,14 @@ class NES_TP:
 
             Arguments:
                 x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
 
             Returns:
                 Hessian : numpy array (N, dim*((dim - 1)/2 + 1) ) of floats
         """        
-        X = self.predict_inputs(x, 'Hs')
-        H = self.outs['Hs'].predict(X, **pred_kw)
-        return H
+        return self._predict(x, 'Hs', **kwargs)
 
-    def Raylets(self, xs1, xs2, Xc, traveltimes=False, **pred_kw):
+    def Raylets(self, xs1, xs2, Xc, traveltimes=False, **kwargs):
         """ 
             Computes the norm of gradient of combined traveltime field between 'xs1' and 'xs2'. 
             'xs1' and 'xs2' define a source-receiver pair. The norm of gradient is used to calculate raylets 
@@ -833,7 +802,7 @@ class NES_TP:
                         Actually, 'xs1' and 'xs2' define a source-receiver pair.
                 Xc : float array (N, dim) : Points 'c' where '|grad_c T_12|' is computed
                 traveltimes : boolean : whether to compute combined traveltime field
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
             Returns:
                 grad_c T_12 : gradient of combined traveltime field between 'xs1' and 'xs2'
                 T_12 : combined traveltime field (if `traveltimes` is True)
@@ -843,14 +812,14 @@ class NES_TP:
         xs2 = np.array(xs2).squeeze().reshape([1]*len(dims) + [len(xs2)])
 
         Xc1 = np.concatenate((np.tile(xs1, Xc.shape[:-1] + (1,)), Xc), axis=-1)
-        dTc = self.GradientR(Xc1, **pred_kw)
+        dTc = self.GradientR(Xc1, **kwargs)
         Xc2 = np.concatenate((Xc, np.tile(xs2, Xc.shape[:-1] + (1,))), axis=-1)
-        dTc += self.GradientS(Xc2, **pred_kw)
+        dTc += self.GradientS(Xc2, **kwargs)
         abs_dTc = np.linalg.norm(dTc, axis=-1).reshape(Xc.shape[:-1])
 
         if traveltimes:
-            Tc = self.Traveltime(Xc1, **pred_kw)
-            Tc += self.Traveltime(Xc2, **pred_kw)
+            Tc = self.Traveltime(Xc1, **kwargs)
+            Tc += self.Traveltime(Xc2, **kwargs)
             return abs_dTc, Tc.reshape(Xc.shape[:-1])
         else:
             return abs_dTc
@@ -872,6 +841,13 @@ class NES_TP:
                 X[kwi] = x[..., r + i].ravel()
         return X
 
+    def _predict(self, x, out, **kwargs):
+        if kwargs.get('batch_size') is None:
+            kwargs['batch_size'] = 100000
+        X = self._prepare_inputs(self.outs[out], x, self.velocity)
+        P = self.outs[out].predict(X, **kwargs).reshape(*x.shape[:-1], -1).squeeze()
+        return P
+
     def train_inputs(self, x):
         """
             Creates dictionary of inputs for training.
@@ -885,20 +861,6 @@ class NES_TP:
         ids = abs(xr - xs).sum(axis=-1) != 0 # removing singular points
 
         self.x_train = self._prepare_inputs(self.model, x[ids], self.velocity)
-        
-
-    def predict_inputs(self, x, out='T'):
-        """
-            Creates dictionary of inputs for prediction.
-
-            Arguments:
-                x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
-                out : str : For which model inputs should be prepared. See available in 'NES_TP.outs.keys()'
-
-            Returns:
-                X : dict : dictionary of inputs to be feed in a model 'out'
-        """
-        return self._prepare_inputs(self.outs[out], x, self.velocity)
 
     def train_outputs(self,):
         """
