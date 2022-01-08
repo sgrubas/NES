@@ -76,6 +76,10 @@ class NES_OP:
                             If "kwargs.get('kernel_initializer')" is None then "kwargs['kernel_initializer'] = 'he_normal' "
 
         """
+        #### The best initializer
+        if kwargs.get('kernel_initializer') is None:
+            kwargs['kernel_initializer'] = 'he_normal'
+
         # Saving configuration for reproducibility, to save and load model
         self.config['nl'] = nl
         self.config['nu'] = nu
@@ -84,23 +88,18 @@ class NES_OP:
         self.config['input_scale'] = input_scale
         self.config['factored'] = factored
         self.config['out_vscale'] = out_vscale
-
-        # The best initializer
-        if kwargs.get('kernel_initializer') is None:
-            kwargs['kernel_initializer'] = 'he_normal'
-
         for kw, v in kwargs.items():
             self.config[kw] = v
 
-        # Receiver coordinate input
+        #### Receiver coordinate input
         xr_list = [L.Input(shape=(1,), name=f'xr{i}') for i in range(self.dim)]
 
-        # Source coordinate reduction
+        #### Source coordinate reduction
         xr = L.Concatenate(name='xr', axis=-1)(xr_list)
         xs = SourceLoc(self.xs, name='SourceLoc')(xr)
         x = L.Subtract(name='Centering')([xr, xs])
 
-        # Trainable body with Traveltime Output
+        #### Trainable body with Traveltime Output
         if input_scale:
             x_sc = Rescaling(1 / self.xscale, name='input_scaling')(x)
         else:
@@ -108,7 +107,7 @@ class NES_OP:
 
         T = DenseBody(x_sc, nu, nl, out_dim=1, act=act, out_act=out_act, **kwargs)
 
-        # Factorized solution
+        #### Factorized solution
         if out_vscale:
             vmin, vmax = self.velocity.min, self.velocity.max
             T = L.Lambda(lambda z: (1 / vmin - 1 / vmax) * z + 1 / vmax, name='V_factor')(T)
@@ -116,34 +115,39 @@ class NES_OP:
             D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='D_factor')(x)
             T = L.Multiply(name='Traveltime')([T, D])
 
-        # Final Traveltime Model
+        #### Final Traveltime Model
         Tm = Model(inputs=xr_list, outputs=T)
 
-        # Gradient
+        #### Gradient
         dT_list = Diff(name='gradients')([T, xr_list])
         dT = L.Concatenate(name='Gradient', axis=-1)(dT_list)
         Gm = Model(inputs=xr_list, outputs=dT)
 
-        # Eikonal equation
+        #### Eikonal equation
         v = L.Input(shape=(1,), name='v') # Velocity input
         Eq = self.equation(dT_list, v)
         Em = Model(inputs=xr_list + [v], outputs=Eq)
 
-        # Velocity
+        #### Velocity
         V = L.Lambda(lambda z: 1 / tf.norm(z, axis=-1, keepdims=True), name='Velocity')(dT)
         Vm = Model(inputs=xr_list, outputs=V)
 
-        # Laplacian calculation
-        d2T_list = []
+        #### Laplacian
+        L_list = []
         for i, dTi in enumerate(dT_list):
-            d2Ti = Diff(name=f'd2T{i}')([dTi, xr_list[i]])
-            d2T_list += d2Ti
-        d2T = L.Concatenate(name='d2T', axis=-1)(d2T_list)
-        LT = L.Lambda(lambda z: tf.reduce_sum(z, axis=-1, keepdims=True), name='Laplacian')(d2T)
+            L_list += Diff(name=f'L{i}')([dTi, xr_list[i]])
+        LT = L.Add(name='Laplacian')(L_list)
         Lm = Model(inputs=xr_list, outputs=LT)
 
+        #### Full Hessian
+        H_list = []
+        for i, dTri in enumerate(dT_list):
+            H_list += Diff(name=f'd2T{i}')([dTri, xr_list[i:]])
+        H = L.Concatenate(axis=-1, name='Hessians')(H_list)
+        Hm = Model(inputs=xr_list, outputs=H)
+
         # All callable models
-        self.outs = dict(T=Tm, E=Em, G=Gm, V=Vm, L=Lm, gE=gEm)
+        self.outs = dict(T=Tm, E=Em, G=Gm, V=Vm, L=Lm, H=Hm)
 
         # Trainable model
         inputs = xr_list + [v]
@@ -179,21 +183,6 @@ class NES_OP:
         X = self.predict_inputs(xr, 'G')
         G = self.outs['G'].predict(X, **pred_kw)
         return G
-
-    def Laplacian(self, xr, **pred_kw):
-        """
-            Computes laplacian - tau_dxdx + tau_dydy + tau_dzdz.
-
-            Arguments:
-                xr : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension
-                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
-
-            Returns:
-                Laplacian : numpy array (N,) of floats : Laplacian from the source 'NES_OP.xs' at 'xr'
-        """        
-        X = self.predict_inputs(xr, 'L')
-        L = self.outs['L'].predict(X, **pred_kw)
-        return L
         
     def Velocity(self, xr, **pred_kw):
         """
@@ -209,6 +198,40 @@ class NES_OP:
         X = self.predict_inputs(xr, 'V')
         V = self.outs['V'].predict(X, **pred_kw)
         return V
+
+    def Laplacian(self, xr, **pred_kw):
+        """
+            Computes laplacian - tau_dxdx + tau_dydy + tau_dzdz.
+
+            Arguments:
+                xr : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension
+                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+
+            Returns:
+                Laplacian : numpy array (N,) of floats : Laplacian from the source 'NES_OP.xs' at 'xr'
+        """        
+        X = self.predict_inputs(xr, 'L')
+        L = self.outs['L'].predict(X, **pred_kw)
+        return L
+
+
+    def Hessian(self, xr, **pred_kw):
+        """
+            Computes full Hessian in a form of:
+            1D: [tau_dxdx]
+            2D: [tau_dxdx, tau_dxdy, tau_dydy]
+            3D: [tau_dxdx, tau_dxdy, tau_dxdz, tau_dydy, tau_dydz, tau_dzdz]
+
+            Arguments:
+                xr : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension
+                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+
+            Returns:
+                Hessian : numpy array (N, dim*((dim - 1)/2 + 1) ) of floats : Laplacian from the source 'NES_OP.xs' at 'xr'
+        """        
+        X = self.predict_inputs(xr, 'H')
+        H = self.outs['H'].predict(X, **pred_kw)
+        return H
 
     @staticmethod
     def _prepare_inputs(model, x, velocity):
@@ -539,6 +562,10 @@ class NES_TP:
                             If "kwargs.get('kernel_initializer')" is None then "kwargs['kernel_initializer'] = 'he_normal' "
 
         """
+        #### The best initializer
+        if kwargs.get('kernel_initializer') is None:
+            kwargs['kernel_initializer'] = 'he_normal'
+
         # Saving configuration for reproducibility, to save and load model
         self.config['nl'] = nl
         self.config['nu'] = nu
@@ -549,26 +576,21 @@ class NES_TP:
         self.config['out_vscale'] = out_vscale
         self.config['reciprocity'] = reciprocity
         self.config['losses'] = self.losses
-
-        # The best initializer
-        if kwargs.get('kernel_initializer') is None:
-            kwargs['kernel_initializer'] = 'he_normal'
-
         for kw, v in kwargs.items():
             self.config[kw] = v
 
-        ## Input for Source part
+        #### Input for Source part
         xs_list = [L.Input(shape=(1,), name='xs' + str(i)) for i in range(self.dim)]
         xs = L.Concatenate(name='xs', axis=-1)(xs_list)
 
-        ## Input for Receiver part
+        #### Input for Receiver part
         xr_list = [L.Input(shape=(1,), name='xr' + str(i)) for i in range(self.dim)]
         xr = L.Concatenate(name='xr', axis=-1)(xr_list)
         
-        # Input list
+        #### Input list
         inputs = xs_list + xr_list
 
-        # Trainable body
+        #### Trainable body
         X = L.Concatenate(name='x', axis=-1)([xs, xr])
         if input_scale:
             X_sc = Rescaling(1 / self.xscale, name='X_scaling')(X)
@@ -577,7 +599,7 @@ class NES_TP:
 
         T = DenseBody(X_sc, nu, nl, out_dim=1, act=act, out_act=out_act, **kwargs)
 
-        ### Factorization ###
+        #### Factorization
         # Scaling to the range of [1/vmax , 1/vmin]. T is assumed to be in [0, 1]
         if out_vscale:
             vmin, vmax = self.velocity.min, self.velocity.max
@@ -587,8 +609,8 @@ class NES_TP:
             D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='D_factor')(xr_xs)    
             T = L.Multiply(name='Traveltime')([T, D])
 
-        # Reciprocity T(xs,xr)=T(xr,xs)
-        if reciprocity:
+        #### Reciprocity 
+        if reciprocity: # T(xs,xr)=T(xr,xs)
             t = Model(inputs=inputs, outputs=T)
             xsr = xs_list + xr_list; xrs = xr_list + xs_list;
             tsr = t(xsr); trs = t(xrs)
@@ -596,49 +618,63 @@ class NES_TP:
 
         Tm = Model(inputs=inputs, outputs=T)
 
-        # Gradient over 'xr'
+        #### Gradient 'xr'
         dTr_list = Diff(name='gradients_xr')([T, xr_list])
         dTr = L.Concatenate(axis=-1, name='Gradient_xr')(dTr_list)
         Gr = Model(inputs=inputs, outputs=dTr)
 
-        # Eikonal over 'xr'
+        #### Eikonal 'xr'
         vr = L.Input(shape=(1,), name='vr') # velocity input for 'xr'
         Er = self.equation(dTr_list, vr)
         Emr = Model(inputs=inputs + [vr], outputs=Er)
 
-        # Gradient over 'xs'
+        #### Gradient 'xs'
         dTs_list = Diff(name='gradients_xs')([T, xs_list])
         dTs = L.Concatenate(axis=-1, name='Gradient_xs')(dTs_list)
         Gs = Model(inputs=inputs, outputs=dTs)
 
-        # Eikonal over 'xs'
+        #### Eikonal 'xs'
         vs = L.Input(shape=(1,), name='vs') # velocity input for 'xs'
         Es = self.equation(dTs_list, vs)
         Ems = Model(inputs=inputs + [vs], outputs=Es)
 
-        #### Hessians rr ####
-        d2Tr_list = []
-        for i, dTri in enumerate(dTr_list):
-            d2Tr_list += Diff(name='d2Trr' + str(i))([dTri, xr_list[i:]])
-        HTr = L.Concatenate(axis=-1, name='Hessians_xr')(d2Tr_list)
-        Hmr = Model(inputs=inputs, outputs=HTr)
+        #### Laplacian 'xr'
+        Lr_list = []
+        for i, dTi in enumerate(dTr_list):
+            Lr_list += Diff(name=f'Lr{i}')([dTi, xr_list[i]])
+        Lr = L.Add(name='Laplacian_xr')(Lr_list)
+        Lrm = Model(inputs=inputs, outputs=Lr)
 
-        #### Hessians ss ####
-        d2Ts_list = []
+        #### Laplacian 'xs'
+        Ls_list = []
+        for i, dTi in enumerate(dTs_list):
+            Ls_list += Diff(name=f'Ls{i}')([dTi, xs_list[i]])
+        Ls = L.Add(name='Laplacian_xs')(Lr_list)
+        Lsm = Model(inputs=inputs, outputs=Ls)
+
+        #### Full Hessian 'xr'
+        Hr_list = []
+        for i, dTri in enumerate(dTr_list):
+            Hr_list += Diff(name=f'Hr{i}')([dTri, xr_list[i:]])
+        Hr = L.Concatenate(axis=-1, name='Hessian_xr')(Hr_list)
+        Hrm = Model(inputs=inputs, outputs=Hr)
+
+        #### Hessians ss
+        Hs_list = []
         for i, dTsi in enumerate(dTs_list):
-            d2Ts_list += Diff(name='d2Tss' + str(i))([dTsi, xs_list[i:]])
-        HTs = L.Concatenate(axis=-1, name='Hessians_xs')(d2Ts_list)
-        Hms = Model(inputs=inputs, outputs=HTs)
-        
-        # Trainable model
+            Hs_list += Diff(name=f'Hs{i}')([dTsi, xs_list[i:]])
+        Hs = L.Concatenate(axis=-1, name='Hessian_xs')(Hs_list)
+        Hsm = Model(inputs=inputs, outputs=Hs)
+
+        #### Trainable model ####
         kw_models = dict(Er=Er, Es=Es)
         model_outputs = [kw_models[kw] for kw in self.losses]
         model_inputs = inputs + [vr] * ('Er' in self.losses) + [vs] * ('Es' in self.losses)
         self.model = Model(inputs=model_inputs, outputs=model_outputs)
 
-        # All callable models
-        self.outs = dict(T=Tm, Er=Emr, Es=Ems, 
-                         Gr=Gr, Gs=Gs, HTr=Hmr, HTs=Hms)
+        #### All callable models ####
+        self.outs = dict(T=Tm, Er=Emr, Es=Ems, Gr=Gr, Gs=Gs, 
+                         Lr=Lrm, Ls=Lsm, Hr=Hrm, Hs=Hsm)
 
     def Traveltime(self, x, **pred_kw):
         """
@@ -713,39 +749,115 @@ class NES_TP:
         G = self.GradientS(x=x, **pred_kw)
         return 1 / np.linalg.norm(G, axis=-1)
 
-    def HessianR(self, x, **pred_kw):
+    def LaplacianR(self, x, **pred_kw):
         """
-            Computes hessians at w.r.t. 'xr'.
+            Computes laplacian w.r.t. 'xr' - tau_dxdx + tau_dydy + tau_dzdz.
 
             Arguments:
                 x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
                 **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
 
             Returns:
-                H : numpy array (N, dim*2) of floats : Hessians w.r.t. 'xr' in a form (tau_xx, tau_xy, tau_xz, tau_yy, tau_yz, tau_zz).
+                Laplacian : numpy array (N,) of floats
+        """        
+        X = self.predict_inputs(x, 'Lr')
+        L = self.outs['Lr'].predict(X, **pred_kw)
+        return L
+
+    def LaplacianS(self, x, **pred_kw):
         """
-        X = self.predict_inputs(x, 'HTr')
-        H = self.outs['HTr'].predict(X, **pred_kw)
+            Computes laplacian w.r.t. 'xs' - tau_dxdx + tau_dydy + tau_dzdz.
+
+            Arguments:
+                x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
+                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+
+            Returns:
+                Laplacian : numpy array (N,) of floats
+        """        
+        X = self.predict_inputs(x, 'Ls')
+        L = self.outs['Ls'].predict(X, **pred_kw)
+        return L
+
+    def HessianR(self, x, **pred_kw):
+        """
+            Computes full Hessian w.r.t. 'xr' in a form of:
+            1D: [tau_dxdx]
+            2D: [tau_dxdx, tau_dxdy, tau_dydy]
+            3D: [tau_dxdx, tau_dxdy, tau_dxdz, tau_dydy, tau_dydz, tau_dzdz]
+
+            Arguments:
+                x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
+                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+
+            Returns:
+                Hessian : numpy array (N, dim*((dim - 1)/2 + 1) ) of floats
+        """        
+        X = self.predict_inputs(x, 'Hr')
+        H = self.outs['Hr'].predict(X, **pred_kw)
         return H
 
     def HessianS(self, x, **pred_kw):
         """
-            Computes hessians at w.r.t. 'xs'.
+            Computes full Hessian w.r.t. 'xs' in a form of:
+            1D: [tau_dxdx]
+            2D: [tau_dxdx, tau_dxdy, tau_dydy]
+            3D: [tau_dxdx, tau_dxdy, tau_dxdz, tau_dydy, tau_dydz, tau_dzdz]
 
             Arguments:
                 x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
                 **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
 
             Returns:
-                H : numpy array (N, dim*2) of floats : Hessians w.r.t. 'xs' in a form (tau_xx, tau_xy, tau_xz, tau_yy, tau_yz, tau_zz).
-        """
-        X = self.predict_inputs(x, 'HTs')
-        H = self.outs['HTs'].predict(X, **pred_kw)
+                Hessian : numpy array (N, dim*((dim - 1)/2 + 1) ) of floats
+        """        
+        X = self.predict_inputs(x, 'Hs')
+        H = self.outs['Hs'].predict(X, **pred_kw)
         return H
+
+    def Raylets(self, xs1, xs2, Xc, traveltimes=False, **pred_kw):
+        """ 
+            Computes the norm of gradient of combined traveltime field between 'xs1' and 'xs2'. 
+            'xs1' and 'xs2' define a source-receiver pair. The norm of gradient is used to calculate raylets 
+            (Rawlinson, N., Sambridge, M., & Hauser, J. (2010). 
+            Multipathing, reciprocal traveltime fields and raylets. 
+            Geophysical Journal International, 181(2), 1077-1092.)
+
+            Computes '|grad_c T_12| = |grad_c T_1c + grad_c T_c2|', where 'grad' stands for gradient operation,
+            'c' denotes a point in a medium. Points where '|grad_c T_12| = 0' are stationary points, 
+            which can be used to build raylets (raypaths between 'xs1' and 'xs2').
+
+            Arguments:
+                xs1 : float array (dim,) : first source (or receiver) coordinates
+                xs2 : float array (dim,) : second source (or receiver) coordinates. 
+                        Actually, 'xs1' and 'xs2' define a source-receiver pair.
+                Xc : float array (N, dim) : Points 'c' where '|grad_c T_12|' is computed
+                traveltimes : boolean : whether to compute combined traveltime field
+                **pred_kw : keyword arguments : Arguments for tf.keras.models.Model.predict(**pred_kw) such as 'batch_size'
+            Returns:
+                grad_c T_12 : gradient of combined traveltime field between 'xs1' and 'xs2'
+                T_12 : combined traveltime field (if `traveltimes` is True)
+        """
+        dims = Xc.shape[:-1]
+        xs1 = np.array(xs1).squeeze().reshape([1]*len(dims) + [len(xs1)])
+        xs2 = np.array(xs2).squeeze().reshape([1]*len(dims) + [len(xs2)])
+
+        Xc1 = np.concatenate((np.tile(xs1, Xc.shape[:-1] + (1,)), Xc), axis=-1)
+        dTc = self.GradientR(Xc1, **pred_kw)
+        Xc2 = np.concatenate((Xc, np.tile(xs2, Xc.shape[:-1] + (1,))), axis=-1)
+        dTc += self.GradientS(Xc2, **pred_kw)
+        abs_dTc = np.linalg.norm(dTc, axis=-1).reshape(Xc.shape[:-1])
+
+        if traveltimes:
+            Tc = self.Traveltime(Xc1, **pred_kw)
+            Tc += self.Traveltime(Xc2, **pred_kw)
+            return abs_dTc, Tc.reshape(Xc.shape[:-1])
+        else:
+            return abs_dTc
 
     @staticmethod
     def _prepare_inputs(model, x, velocity):
-        dim = x.shape[-1] // 2
+        dim = velocity.dim
         xs = x[..., :dim]
         xr = x[..., dim:]
         X = {}
@@ -873,14 +985,9 @@ class NES_TP:
 
         # Model weights
         weights_filename = filepath + f'/{filename}_weights'
-        try:
-            # topology may have multiple weights 
-            # with the same names if `reciprocity=True`
-            self.outs['T'].save_weights(weights_filename + '.h5')
-        except:
-            weights = self.outs['T'].get_weights()
-            with open(weights_filename, 'wb') as f: 
-                pickle.dump(weights, f)
+        weights = self.outs['T'].get_weights()
+        with open(weights_filename, 'wb') as f: 
+            pickle.dump(weights, f)
 
         # Optimizer state
         if save_optimizer:
@@ -926,12 +1033,9 @@ class NES_TP:
         
         # Loading weights
         weights_filename = filepath + f'/{filename}_weights'
-        try:
-            NES_TP_instance.outs['T'].load_weights(weights_filename + '.h5', by_name=False)
-        except:
-            with open(weights_filename, 'rb') as f: 
-                weights = pickle.load(f)
-            NES_TP_instance.outs['T'].set_weights(weights)
+        with open(weights_filename, 'rb') as f: 
+            weights = pickle.load(f)
+        NES_TP_instance.outs['T'].set_weights(weights)
         print(f'Loaded model from "{filepath}"')
 
         # Loading optimizer state if available
