@@ -9,6 +9,7 @@ bin-release/
 /NES/__pycache__/
 NES.egg-info/
 /notebooks/.ipynb_checkpoints
+/notebooks/Models
 
 
 # Executables
