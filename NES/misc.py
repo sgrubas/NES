@@ -183,10 +183,12 @@ class LocAnomaly:
             xmin : [x_min, y_min, z_min] lower bound of the domain
             xmax : [x_max, y_max, z_max] upper bound of the domain
         """
-        self.mus = mus.reshape(1, -1)
-        self.sigmas = sigmas.reshape(1, -1)
-        self.min = vmin
-        self.max = vmax
+        self.mus = np.array(mus).reshape(1, -1)
+        self.sigmas = np.array(sigmas).reshape(1, -1)
+        self.min = min(vmin, vmax)
+        self.max = max(vmin, vmax)
+        self.vmin = vmin
+        self.vmax = vmax
         self.xmin = xmin
         self.xmax = xmax
         self.dim = len(mus)
@@ -199,14 +201,14 @@ class LocAnomaly:
         if self.xmax is None:
             self.xmax = X.reshape(-1, X.shape[-1]).max(axis=0)
 
-        V = (self.max - self.min) 
+        V = (self.vmax - self.vmin) 
         V *= np.exp(- ((X - self.mus)**2 / 2 / self.sigmas**2).sum(axis=-1))
-        return V + self.min
+        return V + self.vmin
 
     def gradient(self, X):
         """ Computes the analytical gradient of velocity at 'X'
         """
-        return (self.__call__(X) - self.min)[..., None] * (self.mus - X) / self.sigmas
+        return (self.__call__(X) - self.vmin)[..., None] * (self.mus - X) / self.sigmas
 
 def Marmousi(smooth=None, section=None):
     """
