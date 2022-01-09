@@ -264,20 +264,22 @@ class NES_OP:
         for l in self.model.output_names:
             self.y_train[l] = np.zeros(len(xi))
 
-    def compile(self, optimizer=None, loss='mae', lr=2.5e-3, decay=1e-4, **kwargs):
+    def compile(self, optimizer=None, loss='mae', lr=3e-3, decay=5e-4, **kwargs):
         """
             Compiles the neural-network model for training.
 
             Arguments:
                 optimizer : Instance of 'tf.optimizers.Optimizer' : Optimizer of weights. 
-                            If 'None', 'tf.optimizers.Adam' is used.
-                loss : str (shortcuts for 'tf.keras.losses') : Loss type. By default "loss = 'mae'"
-                lr : float : Learning rate, by default 'lr = 2.5e-3'.
-                decay : float : Decay of learning rate, by default 'decay = 1e-4'.
+                            If 'None', 'tf.optimizers.Adam(amsgrad=True)' is used.
+                loss : str (shortcuts of 'tf.keras.losses') : Loss type. By default "loss = 'mae'"
+                lr : float : Learning rate, by default 'lr = 3e-3'.
+                decay : float : Decay of learning rate, by default 'decay = 5e-4'.
                 **kwargs : keyword arguments : Arguments for 'tf.keras.models.Model.compile(**kwargs)'
         """
         if optimizer is None:
-            optimizer = tf.optimizers.Adam(learning_rate=lr, decay=decay)
+            optimizer = tf.optimizers.Adam(learning_rate=lr, decay=decay,
+                                           beta_1=0.9, beta_2=0.999,
+                                           epsilon=1e-7, amsgrad=True)
 
         self.model.compile(optimizer=optimizer, loss=loss, **kwargs)
         self.compiled = True
@@ -871,20 +873,22 @@ class NES_TP:
         for l in self.model.output_names:
             self.y_train[l] = np.zeros(len(xi))
 
-    def compile(self, optimizer=None, loss='mae', lr=2.5e-3, decay=1e-4, **kwargs):
+    def compile(self, optimizer=None, loss='mae', lr=3e-3, decay=5e-4, **kwargs):
         """
             Compiles the neural-network model for training.
 
             Arguments:
                 optimizer : Instance of 'tf.optimizers.Optimizer' : Optimizer of weights. 
-                            If 'None', 'tf.optimizers.Adam' is used.
+                            If 'None', 'tf.optimizers.Adam(amsgrad=True)' is used.
                 loss : str (shortcuts for 'tf.keras.losses') : Loss type. By default "loss = 'mae'"
-                lr : float : Learning rate, by default 'lr = 2.5e-3'.
-                decay : float : Decay of learning rate, by default 'decay = 1e-4'.
+                lr : float : Learning rate, by default 'lr = 3e-3'.
+                decay : float : Decay of learning rate, by default 'decay = 5e-4'.
                 **kwargs : keyword arguments : Arguments for 'tf.keras.models.Model.compile(**kwargs)'
         """
         if optimizer is None:
-            optimizer = tf.optimizers.Adam(learning_rate=lr, decay=decay)
+            optimizer = tf.optimizers.Adam(learning_rate=lr, decay=decay,
+                                           beta_1=0.9, beta_2=0.999,
+                                           epsilon=1e-7, amsgrad=True)
 
         self.model.compile(optimizer=optimizer, loss=loss, **kwargs)
         self.compiled = True
