@@ -11,13 +11,15 @@ import pkg_resources
 
 class Uniform_PDF:
     """
-        API for generating uniform distribution in a given domain
+        API for generating uniform distribution in a given velocity model
     """
     limits = None 
-    def __init__(self, limits):
-        """limits : [[xmin, xmax], [ymin, ymax], [zmin, zmax]]
+    def __init__(self, velocity):
+        """velocity: velocity class
         """
-        self.limits = np.array(limits, ndmin=2)
+        xmins = velocity.xmin
+        xmaxs = velocity.xmax
+        self.limits = np.array([xmins, xmaxs]).T
 
     def __call__(self, num_points):
         """ Return random points from uniform distribution in a given domain
@@ -244,4 +246,4 @@ def MarmousiSmoothedPart():
     """
         Return smoothed central part of Marmousi model 'NES.Marmousi(smooth=3, section=[[600, 900], None])' 
     """
-    return Marmousi(smooth=3, section=[[600, 900], [0, 10000]])
+    return Marmousi(smooth=3, section=[[600, 900], None])
