@@ -3,7 +3,7 @@ import numpy as np
 import tensorflow.keras.layers as L
 from tensorflow.keras.layers.experimental.preprocessing import Rescaling
 from tensorflow.keras.models import Model
-from .baseLayers import DenseBody, Diff, SourceLoc, NES_EarlyStopping
+from .utils import DenseBody, Diff, SourceLoc, NES_EarlyStopping, Generator
 from .eikonalLayers import IsoEikonal
 from .misc import Interpolator
 import pickle, pathlib, shutil
@@ -270,21 +270,19 @@ class NES_OP:
 
             Arguments:
                 optimizer : Instance of 'tf.optimizers.Optimizer' : Optimizer of weights. 
-                            If 'None', 'tf.optimizers.Adam(amsgrad=True)' is used.
+                            If 'None', 'tf.optimizers.Adam' is used.
                 loss : str (shortcuts of 'tf.keras.losses') : Loss type. By default "loss = 'mae'"
                 lr : float : Learning rate, by default 'lr = 3e-3'.
                 decay : float : Decay of learning rate, by default 'decay = 5e-4'.
                 **kwargs : keyword arguments : Arguments for 'tf.keras.models.Model.compile(**kwargs)'
         """
         if optimizer is None:
-            optimizer = tf.optimizers.Adam(learning_rate=lr, decay=decay,
-                                           beta_1=0.9, beta_2=0.999,
-                                           epsilon=1e-7, amsgrad=True)
+            optimizer = tf.optimizers.Adam(learning_rate=lr, decay=decay)
 
         self.model.compile(optimizer=optimizer, loss=loss, **kwargs)
         self.compiled = True
 
-    def train(self, x_train=None, tolerance=None, **train_kw):
+    def train(self, x_train=None, tolerance=None, sampling='RAR', **train_kw):
         """
             Traines the neural-network model.
 
@@ -300,28 +298,35 @@ class NES_OP:
                 **train_kw : keyword arguments : Arguments for 'tf.keras.models.Model.fit(**train_kw)' such as 'batch_size', 'epochs'
         """
         if x_train is None:
-            assert self.x_train is not None, " if `x_train` is not given, `NES_OP.x_train` must be defined"
+            assert self.x_train is not None, \
+            " if `x_train` is not given, `NES_OP.x_train` must be defined"
+        elif isinstance(x_train, tf.keras.utils.Sequence):
+            self.x_train = x_train
         else:
             self.train_inputs(x_train)
-
-        if self.y_train is None:
             self.train_outputs()
+            self.data_generator = Generator(self.x_train, len(self.model.outputs), 
+                                      batch_size=train_kw.pop('batch_size', None), 
+                                      sample_weights=train_kw.pop('sample_weights', None), 
+                                      shuffle=train_kw.pop('shuffle', True))
 
         if not self.compiled:
             self.compile()
 
+        callbacks = []
         if isinstance(tolerance, (float, tf.keras.callbacks.Callback)):
             if isinstance(tolerance, float):
                 EarlyStopping = NES_EarlyStopping(tolerance=tolerance)
             else:
                 EarlyStopping = tolerance
+            callbacks.append(EarlyStopping)
 
-            if train_kw.get('callbacks') is None:
-                train_kw['callbacks'] = [EarlyStopping]
-            else:
-                train_kw['callbacks'].append(EarlyStopping)
+        if train_kw.get('callbacks') is None:
+            train_kw['callbacks'] = callbacks
+        else:
+            train_kw['callbacks'] += callbacks
 
-        h = self.model.fit(x=self.x_train, y=self.y_train, **train_kw)
+        h = self.model.fit(x=self.data_generator, **train_kw)
         return h
 
     def save(self, filepath, save_optimizer=False, training_data=False):
@@ -433,7 +438,7 @@ class NES_OP:
                 T_test_set : tuple (x_test, y_test) : 'x_test' is numpy array (N, dim) of floats (receiver coordinates),
                                                       'y_test' is numpy array (N,) of floats (traveltimes).
                 t_evol : boolean : Saves the solution on 'x_test' for each 'step_epochs'
-                compile_kw : dict : Dict of keyword arguments for 'tf.keras.models.Model.compile(**compile_kw)'
+                compile_kw : dict : Dict of keyword arguments for 'NES_OP.compile(**compile_kw)'
                 pred_kw : dict : Dict of keyword arguments for 'tf.keras.models.Model.predict(**pred_kw)'
                 **train_kw : keyword arguments : Arguments for 'tf.keras.models.Model.fit(**train_kw)' such as 'batch_size'
 
@@ -879,16 +884,14 @@ class NES_TP:
 
             Arguments:
                 optimizer : Instance of 'tf.optimizers.Optimizer' : Optimizer of weights. 
-                            If 'None', 'tf.optimizers.Adam(amsgrad=True)' is used.
+                            If 'None', 'tf.optimizers.Adam' is used.
                 loss : str (shortcuts for 'tf.keras.losses') : Loss type. By default "loss = 'mae'"
                 lr : float : Learning rate, by default 'lr = 3e-3'.
                 decay : float : Decay of learning rate, by default 'decay = 5e-4'.
                 **kwargs : keyword arguments : Arguments for 'tf.keras.models.Model.compile(**kwargs)'
         """
         if optimizer is None:
-            optimizer = tf.optimizers.Adam(learning_rate=lr, decay=decay,
-                                           beta_1=0.9, beta_2=0.999,
-                                           epsilon=1e-7, amsgrad=True)
+            optimizer = tf.optimizers.Adam(learning_rate=lr, decay=decay)
 
         self.model.compile(optimizer=optimizer, loss=loss, **kwargs)
         self.compiled = True
@@ -1042,7 +1045,7 @@ class NES_TP:
                 T_test_set : tuple (x_test, y_test) : 'x_test' is numpy array (N, dim) of floats (receiver coordinates),
                                                       'y_test' is numpy array (N,) of floats (traveltimes).
                 t_evol : boolean : Saves the solution on 'x_test' for each 'step_epochs'
-                compile_kw : dict : Dict of keyword arguments for 'tf.keras.models.Model.compile(**compile_kw)'
+                compile_kw : dict : Dict of keyword arguments for 'NES_OP.compile(**compile_kw)'
                 pred_kw : dict : Dict of keyword arguments for 'tf.keras.models.Model.predict(**pred_kw)'
                 **train_kw : keyword arguments : Arguments for 'tf.keras.models.Model.fit(**train_kw)' such as 'batch_size'
 
