@@ -99,12 +99,13 @@ class NES_OP:
         xs = SourceLoc(self.xs, name='SourceLoc')(xr)
         x = L.Subtract(name='Centering')([xr, xs])
 
-        #### Trainable body with Traveltime Output
+        #### Input scaling
         if input_scale:
             x_sc = Rescaling(1 / self.xscale, name='input_scaling')(x)
         else:
             x_sc = x
-
+        
+        #### Trainable body with Traveltime Output
         T = DenseBody(x_sc, nu, nl, out_dim=1, act=act, out_act=out_act, **kwargs)
 
         #### Factorized solution
@@ -282,7 +283,7 @@ class NES_OP:
         self.model.compile(optimizer=optimizer, loss=loss, **kwargs)
         self.compiled = True
 
-    def train(self, x_train=None, tolerance=None, sampling='RAR', **train_kw):
+    def train(self, x_train=None, tolerance=None, **train_kw):
         """
             Traines the neural-network model.
 
@@ -298,10 +299,10 @@ class NES_OP:
                 **train_kw : keyword arguments : Arguments for 'tf.keras.models.Model.fit(**train_kw)' such as 'batch_size', 'epochs'
         """
         if x_train is None:
-            assert self.x_train is not None, \
+            assert isinstance(self.x_train, tf.keras.utils.Sequence), \
             " if `x_train` is not given, `NES_OP.x_train` must be defined"
         elif isinstance(x_train, tf.keras.utils.Sequence):
-            self.x_train = x_train
+            self.data_generator = x_train
         else:
             self.train_inputs(x_train)
             self.train_outputs()
@@ -423,68 +424,6 @@ class NES_OP:
 
         return NES_OP_instance
 
-    def train_evolution(self, max_epochs=1000, step_epochs=10, x_train=None, tqdm=None, T_test_set=None,
-                 t_evol=False, compile_kw=dict(lr=1e-3, decay=1e-4, loss='mae'), 
-                 pred_kw=dict(batch_size=100000), **train_kw):
-        """
-            Traines the neural-network model and tracks the evolution of traveltime accuracy comparing to the reference.
-
-            Arguments:
-                max_epochs : int : Total number of epochs for training
-                step_epochs : int : Step for each we track the traveltime accuracy
-                x_train : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension. 
-                                If 'None', "NES_OP.x" are used.
-                tqdm : instance of tqdm : Progress bar
-                T_test_set : tuple (x_test, y_test) : 'x_test' is numpy array (N, dim) of floats (receiver coordinates),
-                                                      'y_test' is numpy array (N,) of floats (traveltimes).
-                t_evol : boolean : Saves the solution on 'x_test' for each 'step_epochs'
-                compile_kw : dict : Dict of keyword arguments for 'NES_OP.compile(**compile_kw)'
-                pred_kw : dict : Dict of keyword arguments for 'tf.keras.models.Model.predict(**pred_kw)'
-                **train_kw : keyword arguments : Arguments for 'tf.keras.models.Model.fit(**train_kw)' such as 'batch_size'
-
-            Returns:
-                Logs : dict : Evolution of solution and MAE with the reference solution in a form {'mae':mae, 't_evolve': t_evolve}
-        """
-        def mae_assess():
-            if mae_bool:
-                t_pred = self.Traveltime(T_test_set[0], **pred_kw).ravel()
-                mae_i = np.mean(np.abs(t_pred - T_test_set[1].ravel()))
-                mae.append(mae_i)
-                if t_evol:
-                    t_evolve.append(t_pred)
-
-        # Train set preparation
-        self.train_inputs(x_train)
-        self.train_outputs()
-
-        # Outer Callbacks
-        mae_bool = isinstance(T_test_set, (list, tuple))
-        mae = [] # if 'T_test_set' is given
-        t_evolve = [] # if 't_evol'
-
-        # Compilation
-        self.compile(**compile_kw)
-
-        if step_epochs is not None:
-            train_kw['epochs'] = step_epochs
-
-        # Progress bar
-        steps = np.ceil(max_epochs / train_kw['epochs']).astype(int)
-        if tqdm is not None:
-            p_bar = tqdm(total=steps)
-
-        for i in range(steps):
-            # Metric with reference solution
-            mae_assess()
-            # Train
-            self.model.fit(x=self.x_train, y=self.y_train, **train_kw)
-            if tqdm is not None: p_bar.update()
-
-        # Metric with reference solution
-        mae_assess()
-
-        return {'mae':mae, 't_evolve': t_evolve}
-
 
 ##############################################################################
                     ### TWO POINT NEURAL EIKONAL SOLVER ###
@@ -580,13 +519,14 @@ class NES_TP:
         #### Input list
         inputs = xs_list + xr_list
 
-        #### Trainable body
+        #### Input scaling
         X = L.Concatenate(name='x', axis=-1)([xs, xr])
         if input_scale:
             X_sc = Rescaling(1 / self.xscale, name='X_scaling')(X)
         else:
             X_sc = X
 
+        #### Trainable body
         T = DenseBody(X_sc, nu, nl, out_dim=1, act=act, out_act=out_act, **kwargs)
 
         #### Factorization
@@ -606,6 +546,7 @@ class NES_TP:
             tsr = t(xsr); trs = t(xrs)
             T = L.Lambda(lambda x: 0.5*(x[0] + x[1]), name='Reciprocity')([tsr, trs])
 
+        #### Final Traveltime Model
         Tm = Model(inputs=inputs, outputs=T)
 
         #### Gradient 'xr'
@@ -908,27 +849,35 @@ class NES_TP:
                 **train_kw : keyword arguments : Arguments for 'tf.keras.models.Model.fit(**train_kw)' such as 'batch_size', 'epochs'
         """
         if x_train is None:
-            assert self.x_train is not None, " if `x_train` is not given, `NES_OP.x_train` must be defined"
+            assert isinstance(self.x_train, tf.keras.utils.Sequence), \
+            " if `x_train` is not given, `NES_OP.x_train` must be defined"
+        elif isinstance(x_train, tf.keras.utils.Sequence):
+            self.data_generator = x_train
         else:
             self.train_inputs(x_train)
-
-        if self.y_train is None:
             self.train_outputs()
+            self.data_generator = Generator(self.x_train, len(self.model.outputs), 
+                                      batch_size=train_kw.pop('batch_size', None), 
+                                      sample_weights=train_kw.pop('sample_weights', None), 
+                                      shuffle=train_kw.pop('shuffle', True))
+
         if not self.compiled:
             self.compile()
 
+        callbacks = []
         if isinstance(tolerance, (float, tf.keras.callbacks.Callback)):
             if isinstance(tolerance, float):
                 EarlyStopping = NES_EarlyStopping(tolerance=tolerance)
             else:
                 EarlyStopping = tolerance
+            callbacks.append(EarlyStopping)
 
-            if train_kw.get('callbacks') is None:
-                train_kw['callbacks'] = [EarlyStopping]
-            else:
-                train_kw['callbacks'].append(EarlyStopping)
+        if train_kw.get('callbacks') is None:
+            train_kw['callbacks'] = callbacks
+        else:
+            train_kw['callbacks'] += callbacks
 
-        h = self.model.fit(x=self.x_train, y=self.y_train, **train_kw)
+        h = self.model.fit(x=self.data_generator, **train_kw)
         return h
 
     def save(self, filepath, save_optimizer=False, training_data=False):
@@ -1024,71 +973,6 @@ class NES_TP:
         if pathlib.Path(data_filename).is_file():
             with open(data_filename, 'rb') as f: 
                 NES_TP_instance.x_train = pickle.load(f)
-            print('Loaded last training data: see NES_OP.x_train')
+            print('Loaded last training data: see NES_TP.x_train')
 
         return NES_TP_instance
-
-    def train_evolution(self, max_epochs=1000, step_epochs=10, x_train=None, 
-                        tqdm=None, T_test_set=None, t_evol=False, 
-                        compile_kw=dict(lr=1e-3, decay=1e-4, loss='mae'), 
-                        pred_kw=dict(batch_size=100000), 
-                        **train_kw):
-        """
-            Traines the neural-network model and tracks the evolution of traveltime accuracy comparing to the reference.
-
-            Arguments:
-                max_epochs : int : Total number of epochs for training
-                step_epochs : int : Step for each we track the traveltime accuracy
-                x_train : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension. 
-                                If 'None', "NES_OP.x" are used.
-                tqdm : instance of tqdm : Progress bar
-                T_test_set : tuple (x_test, y_test) : 'x_test' is numpy array (N, dim) of floats (receiver coordinates),
-                                                      'y_test' is numpy array (N,) of floats (traveltimes).
-                t_evol : boolean : Saves the solution on 'x_test' for each 'step_epochs'
-                compile_kw : dict : Dict of keyword arguments for 'NES_OP.compile(**compile_kw)'
-                pred_kw : dict : Dict of keyword arguments for 'tf.keras.models.Model.predict(**pred_kw)'
-                **train_kw : keyword arguments : Arguments for 'tf.keras.models.Model.fit(**train_kw)' such as 'batch_size'
-
-            Returns:
-                Logs : dict : Evolution of solution and MAE with the reference solution in a form {'mae':mae, 't_evolve': t_evolve}
-        """
-
-        def mae_assess():
-            if mae_bool:
-                t_pred = self.Traveltime(T_test_set[0], **pred_kw).ravel()
-                mae_i = np.mean(np.abs(t_pred - T_test_set[1].ravel()))
-                mae.append(mae_i)
-                if t_evol:
-                    t_evolve.append(t_pred)
-
-        # Train set preparation
-        self.train_inputs(x_train)
-        self.train_outputs()
-
-        # Outer Callbacks
-        mae_bool = isinstance(T_test_set, (list, tuple))
-        mae = [] # if 'T_test_set' is given
-        t_evolve = [] # if 't_evol'
-
-        # Compilation
-        self.compile(**compile_kw)
-
-        if step_epochs is not None:
-            train_kw['epochs'] = step_epochs
-
-        # Progress bar
-        steps = np.ceil(max_epochs / train_kw['epochs']).astype(int)
-        if tqdm is not None:
-            p_bar = tqdm(total=steps)
-
-        for i in range(steps):
-            # Metric with reference solution
-            mae_assess()
-            # Train
-            self.model.fit(x=self.x_train, y=self.y_train, **train_kw)
-            if tqdm is not None: p_bar.update()
-
-        # Metric with reference solution
-        mae_assess()
-
-        return {'mae':mae, 't_evolve': t_evolve}
