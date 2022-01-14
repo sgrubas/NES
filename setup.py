@@ -5,7 +5,7 @@ VERSION         = "0.1.0"
 DESCRIPTION     = "Neural Eikonal Solver: Framework for solving the eikonal equation using neural networks"
 URL             = "https://github.com/sgrubas/NES"
 LICENSE         = "MIT"
-AUTHOR          = "Serafim Grubas, Nikolay Shilov, Georgy Loginov, Anton Duchkov"
+AUTHOR          = "Serafim Grubas, Nikolay Shilov, Anton Duchkov, Georgy Loginov"
 EMAIL           = "serafimgrubas@gmail.com"
 KEYWORDS        = ["Eikonal", "Seismic", "Traveltime"]
 CLASSIFIERS     = [
@@ -19,10 +19,10 @@ CLASSIFIERS     = [
                     ]
 INSTALL_REQUIRES = [
                     'numpy',
-                    'tqdm',
                     'scipy',
+                    'scikit-learn',
                     'tensorflow']
-with open("README.md", "r") as f:
+with open("README.rst", "r") as f:
     LONG_DESCRIPTION = f.read()
 
 setup(
