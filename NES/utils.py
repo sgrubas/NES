@@ -171,14 +171,31 @@ class Generator(tf.keras.utils.Sequence):
         self.shuffle = shuffle
         self.ids = np.arange(0, self.size)
         self.p = None
-        self.importance_batch_size = self.size
-        self._reshuffle()
+        self.shuffle_batch_size = self.size
+        self.reshuffle()
         self.print_status()
 
     def __len__(self):
         return self.num_batches
 
     def __getitem__(self, idx):
+        if self.p is None:
+            return self._get_normal_batch(idx)
+        else:
+            return self._get_important_batch()
+    
+    def on_epoch_end(self,):
+        if self.p is None:
+            self.reshuffle()
+
+    def get_data(self):
+        return self.x, self.y, self.sample_weights
+
+    def reshuffle(self):
+        if self.num_batches > 1 and self.shuffle:
+            self.ids = np.random.choice(self.size, self.shuffle_batch_size, replace=False, p=self.p)
+
+    def _get_normal_batch(self, idx):
         i1 = idx * self.batch_size
         i2 = min(i1 + self.batch_size, self.size)
         ids = self.ids[i1 : i2]
@@ -186,12 +203,13 @@ class Generator(tf.keras.utils.Sequence):
         outputs = [*self.y[ids].T]
         sample_weights = self.sample_weights[ids]
         return inputs, outputs, sample_weights
-    
-    def on_epoch_end(self,):
-        self._reshuffle()
 
-    def get_data(self):
-        return self.x, self.y, self.sample_weights
+    def _get_important_batch(self,):
+        self.reshuffle()
+        inputs = [*self.x[self.ids].T]
+        outputs = [*self.y[self.ids].T]
+        sample_weights = self.sample_weights[self.ids]
+        return inputs, outputs, sample_weights
 
     def add_data(self, x, sample_weights=None):
         if isinstance(x, dict):
@@ -203,17 +221,15 @@ class Generator(tf.keras.utils.Sequence):
         batch_size = np.ceil(x_new.shape[0] / self.num_batches).astype(int)
         self._set_state(x_new, self.y.shape[-1], batch_size, sample_weights, self.shuffle)
 
-    def _reshuffle(self):
-        if self.num_batches > 1 and self.shuffle:
-            self.ids = np.random.choice(self.size, self.importance_batch_size, replace=False, p=self.p)
+    def set_probabilities(self, p):
+        self.p = p.ravel()
+        self.shuffle_batch_size = self.batch_size
+        self.sample_weights = 1.0 / (self.p * self.size)
 
-    def set_batch_probabilities(self, p, batch_size=None):
-        self.p = p
-        if batch_size is None:
-            self.importance_batch_size = self.batch_size
-        else:
-            self.importance_batch_size = batch_size
-        self.sample_weights = 1 / (self.p * self.size)
+    def reset_probabilities(self,):
+        self.p = None
+        self.shuffle_batch_size = self.size
+        self.sample_weights = np.ones(self.size)
 
     def print_status(self,):
         print("\nTotal samples: {} ".format(self.size))
@@ -345,8 +361,8 @@ class NES_EarlyStopping(tf.keras.callbacks.Callback):
 class RARsampling(tf.keras.callbacks.Callback):
     def __init__(self,
                  NES,
-                 m=0.05,
-                 res_pts=0.3,
+                 m=100,
+                 res_pts=1000,
                  freq=10,
                  eps=1e-2,
                  verbose=1,
@@ -367,11 +383,11 @@ class RARsampling(tf.keras.callbacks.Callback):
         if (epoch % self.freq) == 0:
             log = self.evaluate_model()
             if isinstance(log, tuple):
-                self.NES.data_generator.add_data(log[0])
                 if self.verbose > 0:
                     print('Epoch %05d: RAR' % (epoch + 1))
                     print(f'Evaluated loss on test set: {log[1]:.5f}')
                     print(f'{self.m} additional points added to the training set.')
+                self.NES.data_generator.add_data(log[0])
             else:
                 if self.verbose > 1:
                     print('Epoch %05d: RAR' % (epoch + 1))
@@ -402,8 +418,9 @@ class ImportanceSampling(tf.keras.callbacks.Callback):
     def __init__(self,
                  NES,
                  num_seeds=100,
+                 p_min=0.0,
                  freq=1,
-                 patience=10,
+                 duration=10,
                  verbose=1,
                  seeds_batch_size=None,
                 ):
@@ -417,43 +434,49 @@ class ImportanceSampling(tf.keras.callbacks.Callback):
         self.seeds_batch_size = int(seeds_batch_size)
 
         self.freq = freq
+        self.p_min = p_min
         if self.freq == 1:
-            self.patience = np.inf
+            self.duration = np.inf
         else:
-            self.patience = patience
+            self.duration = duration
         self.verbose = verbose
         self.cntr = 0
+        self.cntr2 = 0
+        self.epoch = 0
 
     def on_train_begin(self, logs=None):
         self.define_seeds()
 
-    def on_epoch_begin(self, epoch, logs=None):
-        if epoch % self.freq == 0 and self.cntr == 0:
-            self.cntr = self.patience
+    def on_batch_begin(self, batch, logs=None):
+        if self.cntr == 0 and self.cntr2 == 0:
+            self.cntr = self.duration
             if self.verbose:
-                print('Epoch %05d: Importance Based Sampling : started' % (epoch + 1))
+                print('Epoch %05d: Importance Based Sampling : started' % (self.epoch + 1))
 
         if self.cntr > 0:
             p = self.evaluate_seeds()
-            self.NES.data_generator.set_batch_probabilities(p)
-            self.NES.data_generator._reshuffle()
+            self.NES.data_generator.set_probabilities(p)
 
     def on_epoch_end(self, epoch, logs=None):
+        self.epoch = epoch
         if self.cntr > 0:
             self.cntr -= 1
             if self.cntr == 0:
-                N = self.NES.data_generator.size
-                self.NES.data_generator.set_batch_probabilities(np.full(N, 1/N))
+                self.NES.data_generator.reset_probabilities()
+                self.cntr2 = self.freq
                 if self.verbose:
-                    print('Epoch %05d: Importance Based Sampling : finished' % (epoch + 1))
-
+                    print('Epoch %05d: Importance Based Sampling : finished' % (self.epoch + 1))
+        else:
+            self.cntr2 -= 1
 
     def evaluate_seeds(self,):
         y_eval = np.abs(self.model.predict(self.x_seeds, batch_size=self.seeds_batch_size))
         inds = self.kmeans.predict(self.NES.data_generator.x[:, :self.NES.dim]).squeeze()
         loss = y_eval[inds].squeeze()
         p = loss / np.sum(loss)
-
+        if self.p_min > 0:
+            p[p < self.p_min] = self.p_min
+            p /= np.sum(p)
         return p
 
     def define_seeds(self,):
@@ -463,51 +486,6 @@ class ImportanceSampling(tf.keras.callbacks.Callback):
             self.define_seeds()
             print("Accidentally source point in training set, resetting...")
         self.x_seeds = self.NES._prepare_inputs(self.model, self.seeds, self.NES.velocity)
-
-
-class DistanceSampling(tf.keras.callbacks.Callback):
-    def __init__(self,
-                 NES,
-                 alpha=1.0,
-                 freq=1,
-                 patience=10,
-                 verbose=1,
-                ):
-        super(DistanceSampling, self).__init__()
-
-        self.NES = NES
-        self.alpha = alpha
-        self.freq = freq
-        if self.freq == 1:
-            self.patience = np.inf
-        else:
-            self.patience = patience
-        self.verbose = verbose
-        self.cntr = 0
-
-    def on_train_begin(self, logs=None):
-        R2 = np.sum((self.NES.data_generator.x[:, :self.NES.dim] - self.NES.xs[None, ...])**2, axis=-1)
-        self.p = np.exp(- self.alpha * np.sqrt(R2))
-        self.p /= np.sum(self.p)
-
-    def on_epoch_begin(self, epoch, logs=None):
-        if epoch % self.freq == 0 and self.cntr == 0:
-            self.cntr = self.patience
-            if self.verbose:
-                print('Epoch %05d: Distance Based Sampling : started' % (epoch + 1))
-
-        if self.cntr > 0:
-            self.NES.data_generator.set_batch_probabilities(self.p)
-            self.NES.data_generator._reshuffle()
-
-    def on_epoch_end(self, epoch, logs=None):
-        if self.cntr > 0:
-            self.cntr -= 1
-            if self.cntr == 0:
-                N = self.NES.data_generator.size
-                self.NES.data_generator.set_batch_probabilities(np.full(N, 1/N))
-                if self.verbose:
-                    print('Epoch %05d: Distance Based Sampling : finished' % (epoch + 1))
 
 
 class ImportanceWeighting(tf.keras.callbacks.Callback):
@@ -543,7 +521,7 @@ class ImportanceWeighting(tf.keras.callbacks.Callback):
         y_eval = np.abs(self.model.predict(self.x_seeds, batch_size=self.seeds_batch_size))
         x_train = self.NES.data_generator.x[:, :self.NES.dim]
         if len(y_eval) < len(x_train):
-            inds = self.kmeans.predict().squeeze()
+            inds = self.kmeans.predict(x_train).squeeze()
             loss = y_eval[inds].squeeze()
         else:
             loss = y_eval.squeeze()
@@ -569,8 +547,6 @@ class ImportanceWeighting(tf.keras.callbacks.Callback):
                 self.seeds_batch_size = self.NES.data_generator.batch_size
             else:
                 self.seeds_batch_size = self.num_seeds
-
-        
 
 
 #######################################################################
