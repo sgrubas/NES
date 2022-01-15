@@ -151,29 +151,34 @@ class SourceLoc(L.Layer):
 
 
 class Generator(tf.keras.utils.Sequence):
-    def __init__(self, x, y_num, batch_size=None, sample_weights=None, shuffle=True):
-        self._set_state(x, y_num, batch_size, sample_weights, shuffle)
+    def __init__(self, x, len_y, batch_size=None, sample_weights=None, shuffle=True):
+        self._set_state(x, len_y, batch_size, sample_weights, shuffle)
 
-    def _set_state(self, x, y_num, batch_size, sample_weights, shuffle):
+    def _set_state(self, x, len_y, batch_size, sample_weights, shuffle):
         if isinstance(x, dict):
             self.x = np.array(list(x.values())).T
-        else:
-            self.x = x
-        self.y = np.zeros((self.x.shape[0], y_num))
+        elif isinstance(x, list):
+            self.x = np.array(x).T
+        elif isinstance(x, np.ndarray):
+            self.x = x.reshape(-1, x.shape[-1])
         self.size = self.x.shape[0]
+        self.y = np.zeros((self.size, len_y))
         if sample_weights is None:
             sample_weights = np.ones(self.size)
         self.sample_weights = sample_weights
         if batch_size is None:
             batch_size = np.ceil(self.size / 4).astype(int)
+
         self.batch_size = batch_size
         self.num_batches = np.ceil(self.size / batch_size).astype(int)
         self.shuffle = shuffle
-        self.ids = np.arange(0, self.size)
-        self.p = None
-        self.shuffle_batch_size = self.size
-        self.reshuffle()
+        self.ids = np.arange(self.size)
+
+        self._normal_shuffle()
         self.print_status()
+
+        self.p = None
+        self.importance_batch_size = None
 
     def __len__(self):
         return self.num_batches
@@ -182,42 +187,45 @@ class Generator(tf.keras.utils.Sequence):
         if self.p is None:
             return self._get_normal_batch(idx)
         else:
-            return self._get_important_batch()
+            return self._get_importance_batch()
     
     def on_epoch_end(self,):
         if self.p is None:
-            self.reshuffle()
+            self._normal_shuffle()
 
     def get_data(self):
         return self.x, self.y, self.sample_weights
 
-    def reshuffle(self):
+    def _normal_shuffle(self):
         if self.num_batches > 1 and self.shuffle:
-            self.ids = np.random.choice(self.size, self.shuffle_batch_size, replace=False, p=self.p)
+            np.random.shuffle(self.x)
+
+    def _importance_shuffle(self):
+        np.random.choice(self.ids, self.importance_batch_size, replace=True, p=self.p)
 
     def _get_normal_batch(self, idx):
         i1 = idx * self.batch_size
         i2 = min(i1 + self.batch_size, self.size)
-        ids = self.ids[i1 : i2]
-        inputs = [*self.x[ids].T]
-        outputs = [*self.y[ids].T]
-        sample_weights = self.sample_weights[ids]
-        return inputs, outputs, sample_weights
+        inputs = [*self.x[i1:i2].T]
+        outputs = [*self.y[i1:i2].T]
+        return inputs, outputs, self.sample_weights[i1:i2]
 
-    def _get_important_batch(self,):
-        self.reshuffle()
+    def _get_importance_batch(self,):
+        self._importance_shuffle()
         inputs = [*self.x[self.ids].T]
-        outputs = [*self.y[self.ids].T]
-        sample_weights = self.sample_weights[self.ids]
-        return inputs, outputs, sample_weights
+        outputs = [*self.y[:self.importance_batch_size].T]
+        return inputs, outputs, self.sample_weights[self.ids]
 
     def add_data(self, x, sample_weights=None):
         if isinstance(x, dict):
             x = np.array(list(x.values())).T
         x_new = np.concatenate((self.x, x.reshape(x.shape[0], self.x.shape[-1])), axis=0)
-        if sample_weights is None:
-            sample_weights = np.ones(x.shape[0])
-        sample_weights = np.concatenate((self.sample_weights, sample_weights), axis=0)
+
+        if sample_weights is not None:
+            sample_weights = np.concatenate((self.sample_weights, sample_weights), axis=0)
+        else:
+            sample_weights = np.concatenate((self.sample_weights, np.ones(x_new.shape[0])), axis=0)
+
         batch_size = np.ceil(x_new.shape[0] / self.num_batches).astype(int)
         self._set_state(x_new, self.y.shape[-1], batch_size, sample_weights, self.shuffle)
 
@@ -247,20 +255,28 @@ class Generator(tf.keras.utils.Sequence):
 
 class LossesHolder(tf.keras.callbacks.Callback):
     """
-        Callback container that can save losses if training is launched multiple times (without overriding)
+        Callback container that can save logs if training is launched multiple times (without overriding)
+
+        Arguments:
+            NES : NES instance : if None, callback collect all available logs. If given, you can pass
+            validation : list of dicts : format : [{'out': 'E', 'x': x, 'y': y or None,
+                                                    'freq': 10, 'batch' : 10000, 
+                                                    'loss_func': lambda x: np.abs(x).mean()}]
+
     """
-    def __init__(self, NES=None, mae_test=None, freq=10, eval_batch_size=1e5):
-        self.mae_test = mae_test
+    def __init__(self, NES=None, validation=[]):
         self.NES = NES
-        self.freq = freq
-        self.eval_batch_size = int(eval_batch_size)
-    
+        for v in validation:
+            assert v.get('out') in NES.outs.keys(), \
+            f"Validation set can be applied for available outputs {NES.outs.keys()}"
+        self.validation = validation
+
     def on_train_begin(self, logs=None):
         self.logs = {'loss' : [], 'epoch': []}
-        if self.mae_test is not None:
-            self.logs['mae'] = []
-            self.logs['mae_epoch'] = []
-
+        
+        for v in self.validation:
+            self.logs[v['out'] + '_loss'] = [] 
+            self.logs[v['out'] + '_epoch'] = [] 
         self.wait = 0
 
     def on_epoch_end(self, epoch, logs=None):
@@ -269,18 +285,17 @@ class LossesHolder(tf.keras.callbacks.Callback):
             if self.logs.get(kw) is None:
                 self.logs[kw] = []
             self.logs[kw].append(v)
-        
-        self.wait += 1
 
-        if ((self.wait % self.freq) == 0) and \
-            (self.mae_test is not None):
-            self.evaluate_model()
-            self.logs['mae_epoch'].append(epoch)
+        for v in self.validation:
+            if ((epoch % v['freq']) == 0):
+                self.logs[v['out'] + '_loss'].append(self.evaluate_model(v))
+                self.logs[v['out'] + '_epoch'].append(epoch) 
 
-    def evaluate_model(self,):
-        t_pred = self.NES.Traveltime(self.mae_test[0], batch_size=self.eval_batch_size)
-        mae = np.abs(t_pred - self.mae_test[1]).mean()
-        self.logs['mae'].append(mae)
+    def evaluate_model(self, v):
+        y_eval = self.NES._predict(v['x'], v['out'], batch_size=v.get('batch_size'))
+        if v.get('y') is not None:
+            y_eval -= v['y']
+        return v['loss_func'](y_eval)
 
 
 class NES_EarlyStopping(tf.keras.callbacks.Callback):
@@ -559,6 +574,25 @@ class ImportanceWeighting(tf.keras.callbacks.Callback):
                 self.seeds_batch_size = self.NES.data_generator.batch_size
             else:
                 self.seeds_batch_size = self.num_seeds
+
+
+def data_handler(x, y, **kwargs):
+    callbacks = kwargs.get('callbacks', [])
+    generator_required = False
+    for c in callbacks:
+        if isinstance(c, (ImportanceSampling, ImportanceWeighting, RARsampling)):
+            generator_required = True
+            break
+
+    if generator_required:
+        data = Generator(x, len(y), 
+                        batch_size=kwargs.pop('batch_size', None), 
+                        sample_weights=kwargs.pop('sample_weights', None), 
+                        shuffle=kwargs.pop('shuffle', True))
+    else:
+        data = (x, y)
+
+    return data
 
 
 #######################################################################
