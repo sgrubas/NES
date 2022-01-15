@@ -224,12 +224,15 @@ class Generator(tf.keras.utils.Sequence):
     def set_probabilities(self, p):
         self.p = p.ravel()
         self.shuffle_batch_size = self.batch_size
-        self.sample_weights = 1.0 / (self.p * self.size)
+        self.set_weights(1.0 / (self.p * self.size))
 
     def reset_probabilities(self,):
         self.p = None
         self.shuffle_batch_size = self.size
         self.sample_weights = np.ones(self.size)
+
+    def set_weights(self, sample_weights):
+        self.sample_weights = sample_weights * self.size / np.sum(sample_weights)
 
     def print_status(self,):
         print("\nTotal samples: {} ".format(self.size))
@@ -367,6 +370,7 @@ class RARsampling(tf.keras.callbacks.Callback):
                  eps=1e-2,
                  verbose=1,
                  eval_batch_size=1e5,
+                 loss_func=lambda x: x+1,
                 ):
         super(RARsampling, self).__init__()
 
@@ -378,9 +382,10 @@ class RARsampling(tf.keras.callbacks.Callback):
         self.verbose = verbose
         self.eps = eps
         self.eval_batch_size = int(eval_batch_size)
+        self.loss_func = loss_func
 
     def on_epoch_end(self, epoch, logs=None):
-        if (epoch % self.freq) == 0:
+        if (epoch % self.freq) == 0 and epoch > 0:
             log = self.evaluate_model()
             if isinstance(log, tuple):
                 if self.verbose > 0:
@@ -395,7 +400,7 @@ class RARsampling(tf.keras.callbacks.Callback):
 
     def evaluate_model(self,):
         x_eval = self.eval_data_generator(self.res_pts)
-        y_eval = np.abs(self.model.predict(x_eval, batch_size=self.eval_batch_size))
+        y_eval = self.loss_func(self.model.predict(x_eval, batch_size=self.eval_batch_size))
         res = y_eval.mean()
 
         if res > self.eps:
@@ -423,6 +428,7 @@ class ImportanceSampling(tf.keras.callbacks.Callback):
                  duration=10,
                  verbose=1,
                  seeds_batch_size=None,
+                 loss_func=lambda x: x+1,
                 ):
         super(ImportanceSampling, self).__init__()
 
@@ -432,6 +438,7 @@ class ImportanceSampling(tf.keras.callbacks.Callback):
         if seeds_batch_size is None:
             seeds_batch_size = num_seeds
         self.seeds_batch_size = int(seeds_batch_size)
+        self.loss_func = loss_func 
 
         self.freq = freq
         self.p_min = p_min
@@ -448,10 +455,13 @@ class ImportanceSampling(tf.keras.callbacks.Callback):
         self.define_seeds()
 
     def on_batch_begin(self, batch, logs=None):
-        if self.cntr == 0 and self.cntr2 == 0:
+        if self.cntr == 0 and self.cntr2 == 0 and self.epoch > 0:
             self.cntr = self.duration
             if self.verbose:
                 print('Epoch %05d: Importance Based Sampling : started' % (self.epoch + 1))
+        elif self.epoch == 0:
+            self.cntr2 = self.freq
+        else: pass
 
         if self.cntr > 0:
             p = self.evaluate_seeds()
@@ -470,7 +480,7 @@ class ImportanceSampling(tf.keras.callbacks.Callback):
             self.cntr2 -= 1
 
     def evaluate_seeds(self,):
-        y_eval = np.abs(self.model.predict(self.x_seeds, batch_size=self.seeds_batch_size))
+        y_eval = self.loss_func(self.model.predict(self.x_seeds, batch_size=self.seeds_batch_size))
         inds = self.kmeans.predict(self.NES.data_generator.x[:, :self.NES.dim]).squeeze()
         loss = y_eval[inds].squeeze()
         p = loss / np.sum(loss)
@@ -496,6 +506,7 @@ class ImportanceWeighting(tf.keras.callbacks.Callback):
                  freq=1,
                  verbose=1,
                  seeds_batch_size=None,
+                 loss_func=lambda x: x + 1,
                 ):
         super(ImportanceWeighting, self).__init__()
 
@@ -504,6 +515,7 @@ class ImportanceWeighting(tf.keras.callbacks.Callback):
         self.w_lims = w_lims
         self.x_seeds = None
         self.seeds_batch_size = seeds_batch_size
+        self.loss_func = loss_func
 
         self.freq = freq
         self.verbose = verbose
@@ -512,13 +524,13 @@ class ImportanceWeighting(tf.keras.callbacks.Callback):
         self.define_seeds()
 
     def on_epoch_begin(self, epoch, logs=None):
-        if epoch % self.freq == 0:
-            self.NES.data_generator.sample_weights = self.evaluate_weights()
+        if epoch % self.freq == 0 and epoch > 0:
+            self.NES.data_generator.set_weights(self.evaluate_weights())
             if self.verbose:
                 print('Epoch %05d: Importance Based Weighting' % (epoch + 1))
 
     def evaluate_weights(self,):
-        y_eval = np.abs(self.model.predict(self.x_seeds, batch_size=self.seeds_batch_size))
+        y_eval = self.loss_func(self.model.predict(self.x_seeds, batch_size=self.seeds_batch_size))
         x_train = self.NES.data_generator.x[:, :self.NES.dim]
         if len(y_eval) < len(x_train):
             inds = self.kmeans.predict(x_train).squeeze()
