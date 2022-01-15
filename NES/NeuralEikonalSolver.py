@@ -3,7 +3,7 @@ import numpy as np
 import tensorflow.keras.layers as L
 from tensorflow.keras.layers.experimental.preprocessing import Rescaling
 from tensorflow.keras.models import Model
-from .utils import DenseBody, Diff, SourceLoc, NES_EarlyStopping, Generator
+from .utils import DenseBody, Diff, SourceLoc, NES_EarlyStopping, data_handler
 from .eikonalLayers import IsoEikonal
 from .misc import Interpolator
 import pickle, pathlib, shutil
@@ -283,7 +283,7 @@ class NES_OP:
         self.model.compile(optimizer=optimizer, loss=loss, **kwargs)
         self.compiled = True
 
-    def train(self, x_train=None, tolerance=None, **train_kw):
+    def train(self, x_train, tolerance=None, **train_kw):
         """
             Traines the neural-network model.
 
@@ -298,18 +298,12 @@ class NES_OP:
                               
                 **train_kw : keyword arguments : Arguments for 'tf.keras.models.Model.fit(**train_kw)' such as 'batch_size', 'epochs'
         """
-        if x_train is None:
-            assert isinstance(self.x_train, tf.keras.utils.Sequence), \
-            " if `x_train` is not given, `NES_OP.x_train` must be defined"
-        elif isinstance(x_train, tf.keras.utils.Sequence):
-            self.data_generator = x_train
-        else:
-            self.train_inputs(x_train)
-            self.train_outputs()
-            self.data_generator = Generator(self.x_train, len(self.model.outputs), 
-                                      batch_size=train_kw.pop('batch_size', None), 
-                                      sample_weights=train_kw.pop('sample_weights', None), 
-                                      shuffle=train_kw.pop('shuffle', True))
+        self.train_inputs(x_train)
+        self.train_outputs()
+        data = data_handler(self.x_train, self.y_train, **train_kw)
+        if isinstance(data, tf.keras.utils.Sequence):
+            self.data_generator = data
+            data = (data,)
 
         if not self.compiled:
             self.compile()
@@ -327,7 +321,7 @@ class NES_OP:
         else:
             train_kw['callbacks'] += callbacks
 
-        h = self.model.fit(x=self.data_generator, **train_kw)
+        h = self.model.fit(*data, **train_kw)
         return h
 
     def save(self, filepath, save_optimizer=False, training_data=False):
@@ -848,18 +842,12 @@ class NES_TP:
                               Empiric dependence 'RMAE = C exp(-Loss)' is used. If 'None', 'tol' is not used
                 **train_kw : keyword arguments : Arguments for 'tf.keras.models.Model.fit(**train_kw)' such as 'batch_size', 'epochs'
         """
-        if x_train is None:
-            assert isinstance(self.x_train, tf.keras.utils.Sequence), \
-            " if `x_train` is not given, `NES_OP.x_train` must be defined"
-        elif isinstance(x_train, tf.keras.utils.Sequence):
-            self.data_generator = x_train
-        else:
-            self.train_inputs(x_train)
-            self.train_outputs()
-            self.data_generator = Generator(self.x_train, len(self.model.outputs), 
-                                      batch_size=train_kw.pop('batch_size', None), 
-                                      sample_weights=train_kw.pop('sample_weights', None), 
-                                      shuffle=train_kw.pop('shuffle', True))
+        self.train_inputs(x_train)
+        self.train_outputs()
+        data = data_handler(self.x_train, self.y_train, **train_kw)
+        if isinstance(data, tf.keras.utils.Sequence):
+            self.data_generator = data
+            data = (data,)
 
         if not self.compiled:
             self.compile()
@@ -877,7 +865,7 @@ class NES_TP:
         else:
             train_kw['callbacks'] += callbacks
 
-        h = self.model.fit(x=self.data_generator, **train_kw)
+        h = self.model.fit(*data, **train_kw)
         return h
 
     def save(self, filepath, save_optimizer=False, training_data=False):
