@@ -150,6 +150,7 @@ class NES_OP:
         # All callable models
         self.outs = dict(T=Tm, E=Em, G=Gm, V=Vm, L=Lm, H=Hm)
 
+        
         # Trainable model
         inputs = xr_list + [v]
         outputs = Eq
@@ -230,12 +231,12 @@ class NES_OP:
             Creates dictionary according to the input names of model
         """
         X = {}
-        dim = velocity.dim
-        for kwi in model.input_names:
+        for kwi, inp in zip(model.input_names, model.inputs):
+            shape = (-1,) + tuple(inp.shape.as_list()[1:])
             if kwi == 'v':
-                X[kwi] = velocity(x).ravel()
+                X[kwi] = velocity(x).reshape(*shape)
             else:
-                X[kwi] = x[..., int(kwi[-1])].ravel()
+                X[kwi] = x[..., int(kwi[-1])].reshape(*shape)
         return X
 
     def _predict(self, xr, out, **kwargs):
@@ -262,8 +263,8 @@ class NES_OP:
         """
         self.y_train = {}
         xi = list(self.x_train.values())[0]
-        for l in self.model.output_names:
-            self.y_train[l] = np.zeros(len(xi))
+        for nm, otp in zip(self.model.output_names, self.model.outputs):
+            self.y_train[nm] = np.zeros((len(xi),) + tuple(otp.shape.as_list()[1:]))
 
     def compile(self, optimizer=None, loss='mae', lr=3e-3, decay=5e-4, **kwargs):
         """
@@ -771,16 +772,18 @@ class NES_TP:
         dim = velocity.dim
         xs = x[..., :dim]
         xr = x[..., dim:]
+        vx = {'vs': xs, 'vr': xr}
         X = {}
-        for kwi in model.input_names:
-            if 'vr' in kwi:
-                X['vr'] = velocity(xr).ravel()
-            elif 'vs' in kwi:
-                X['vs'] = velocity(xs).ravel()
-            else:
+        for kwi, inp in zip(model.input_names, model.inputs):
+            shape = (-1,) + tuple(inp.shape.as_list()[1:])
+            if 'v' in kwi:
+                X[kwi] = velocity(vx[kwi]).reshape(*shape)
+            elif 'xs' in kwi:
                 i = int(kwi[-1])
-                r = dim*('r' in kwi)
-                X[kwi] = x[..., r + i].ravel()
+                X[kwi] = xs[..., i].reshape(*shape)
+            elif 'xr' in kwi:
+                i = int(kwi[-1])
+                X[kwi] = xr[..., i].reshape(*shape)
         return X
 
     def _predict(self, x, out, **kwargs):
@@ -810,8 +813,8 @@ class NES_TP:
         """
         self.y_train = {}
         xi = list(self.x_train.values())[0]
-        for l in self.model.output_names:
-            self.y_train[l] = np.zeros(len(xi))
+        for nm, otp in zip(self.model.output_names, self.model.outputs):
+            self.y_train[nm] = np.zeros((len(xi),) + tuple(otp.shape.as_list()[1:]))
 
     def compile(self, optimizer=None, loss='mae', lr=3e-3, decay=5e-4, **kwargs):
         """
