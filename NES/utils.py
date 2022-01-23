@@ -151,16 +151,22 @@ class SourceLoc(L.Layer):
 
 
 class Generator(tf.keras.utils.Sequence):
-    def __init__(self, x, len_y, batch_size=None, sample_weights=None, shuffle=True):
-        self._set_state(x, len_y, batch_size, sample_weights, shuffle)
+    def __init__(self, x, len_y, batch_size=None, sample_weights=None, shuffle=True, verbose=0):
+        self._set_state(x, len_y, batch_size, sample_weights, shuffle, verbose)
 
-    def _set_state(self, x, len_y, batch_size, sample_weights, shuffle):
+    @staticmethod
+    def _format_input(x):
         if isinstance(x, dict):
-            self.x = np.array(list(x.values())).T
+            X = np.array(list(x.values())).squeeze().T
         elif isinstance(x, list):
-            self.x = np.array(x).T
+            X = np.array(x).squeeze().T
         elif isinstance(x, np.ndarray):
-            self.x = x.reshape(-1, x.shape[-1])
+            X = x.reshape(-1, x.shape[-1])
+        return X
+
+    def _set_state(self, x, len_y, batch_size, sample_weights, shuffle, verbose):
+        
+        self.x = self._format_input(x)
         self.size = self.x.shape[0]
         self.y = np.zeros((self.size, len_y))
         if sample_weights is None:
@@ -175,7 +181,8 @@ class Generator(tf.keras.utils.Sequence):
         self.ids = np.arange(self.size)
 
         self._normal_shuffle()
-        self.print_status()
+        if verbose:
+            self.print_status()
 
         self.p = None
         self.importance_batch_size = None
@@ -216,10 +223,9 @@ class Generator(tf.keras.utils.Sequence):
         outputs = [*self.y[:self.importance_batch_size].T]
         return inputs, outputs, self.sample_weights[self.ids]
 
-    def add_data(self, x, sample_weights=None):
-        if isinstance(x, dict):
-            x = np.array(list(x.values())).T
-        x_new = np.concatenate((self.x, x.reshape(x.shape[0], self.x.shape[-1])), axis=0)
+    def add_data(self, x, sample_weights=None, verbose=0):
+        x = self._format_input(x)
+        x_new = np.concatenate((self.x, x), axis=0)
 
         if sample_weights is not None:
             sample_weights = np.concatenate((self.sample_weights, sample_weights), axis=0)
@@ -227,7 +233,7 @@ class Generator(tf.keras.utils.Sequence):
             sample_weights = np.concatenate((self.sample_weights, np.ones(x_new.shape[0])), axis=0)
 
         batch_size = np.ceil(x_new.shape[0] / self.num_batches).astype(int)
-        self._set_state(x_new, self.y.shape[-1], batch_size, sample_weights, self.shuffle)
+        self._set_state(x_new, self.y.shape[-1], batch_size, sample_weights, self.shuffle, verbose)
 
     def set_probabilities(self, p):
         self.p = p.ravel()
@@ -377,16 +383,9 @@ class NES_EarlyStopping(tf.keras.callbacks.Callback):
 
 
 class RARsampling(tf.keras.callbacks.Callback):
-    def __init__(self,
-                 NES,
-                 m=100,
-                 res_pts=1000,
-                 freq=10,
-                 eps=1e-2,
-                 verbose=1,
-                 eval_batch_size=1e5,
-                 loss_func=lambda x: x+1,
-                ):
+    def __init__(self, NES, m=100, res_pts=1000, freq=10,
+                 eps=1e-2, verbose=1, eval_batch_size=1e5,
+                 loss_func=np.abs):
         super(RARsampling, self).__init__()
 
         self.NES = NES
@@ -407,7 +406,7 @@ class RARsampling(tf.keras.callbacks.Callback):
                     print('Epoch %05d: RAR' % (epoch + 1))
                     print(f'Evaluated loss on test set: {log[1]:.5f}')
                     print(f'{self.m} additional points added to the training set.')
-                self.NES.data_generator.add_data(log[0])
+                self.NES.data_generator.add_data(log[0], sample_weights=None, verbose=self.verbose)
             else:
                 if self.verbose > 1:
                     print('Epoch %05d: RAR' % (epoch + 1))
@@ -443,7 +442,7 @@ class ImportanceSampling(tf.keras.callbacks.Callback):
                  duration=10,
                  verbose=1,
                  seeds_batch_size=None,
-                 loss_func=lambda x: x+1,
+                 loss_func=np.abs,
                 ):
         super(ImportanceSampling, self).__init__()
 
