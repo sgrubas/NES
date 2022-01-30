@@ -5,7 +5,7 @@ from tensorflow.keras.layers.experimental.preprocessing import Rescaling
 from tensorflow.keras.models import Model
 from .utils import DenseBody, Diff, SourceLoc, NES_EarlyStopping, data_handler
 from .eikonalLayers import IsoEikonal
-from .misc import Interpolator
+from .misc import Interpolator, Uniform_PDF
 import pickle, pathlib, shutil
 
 ###############################################################################
@@ -289,8 +289,9 @@ class NES_OP:
             Traines the neural-network model.
 
             Arguments:
-                x_train : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension.
-                                If 'None', previous `NES_OP.x_train` may be used if available
+                x_train : numpy array (N, dim) of floats or int : 
+                                Array of receivers. 'N' - number of receivers, 'dim' - dimension.
+                                If 'int' is given, then random uniform distribution is used with 'x_train' points.
                 tolerance : It can be:
                     1) float - Tolerance value for early stopping in RMAE units for traveltimes.
                                NES_EarlyStopping callback will be created with default options 
@@ -299,6 +300,9 @@ class NES_OP:
                               
                 **train_kw : keyword arguments : Arguments for 'tf.keras.models.Model.fit(**train_kw)' such as 'batch_size', 'epochs'
         """
+        if isinstance(x_train, int):
+            x_train = Uniform_PDF(self.velocity)(x_train)
+
         self.train_inputs(x_train)
         self.train_outputs()
         data = data_handler(self.x_train, self.y_train, **train_kw)
@@ -834,17 +838,27 @@ class NES_TP:
         self.model.compile(optimizer=optimizer, loss=loss, **kwargs)
         self.compiled = True
 
-    def train(self, x_train=None, tolerance=None, **train_kw):
+    def train(self, x_train, tolerance=None, **train_kw):
         """
             Traines the neural-network model.
 
             Arguments:
-                x_train : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension. 
-                                If 'None', "NES_OP.x" are used.
-                tol : float : Tolerance value for early stopping in RMAE units for traveltimes. 
-                              Empiric dependence 'RMAE = C exp(-Loss)' is used. If 'None', 'tol' is not used
+                x_train : numpy array (N, dim*2) of floats or int : 
+                                Array of receivers. 'N' - number of source-receivers pairs, 'dim' - dimension.
+                                If 'int' is given, then random uniform distribution is used with 'x_train' points.
+                tolerance : It can be:
+                    1) float - Tolerance value for early stopping in RMAE units for traveltimes.
+                               NES_EarlyStopping callback will be created with default options 
+                               (see `baseLayers.NES_EarlyStopping`)
+                    2) instance of NES_EarlyStopping callback. 
+                              
                 **train_kw : keyword arguments : Arguments for 'tf.keras.models.Model.fit(**train_kw)' such as 'batch_size', 'epochs'
         """
+        if isinstance(x_train, int):
+            pdf = Uniform_PDF(self.velocity)
+            xs_train, xr_train = pdf(x_train), pdf(x_train)
+            x_train = np.concatenate((xs_train, xr_train), axis=-1)
+
         self.train_inputs(x_train)
         self.train_outputs()
         data = data_handler(self.x_train, self.y_train, **train_kw)
