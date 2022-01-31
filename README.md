@@ -39,7 +39,7 @@ T = Eik.Traveltime(X)
 *  Traveltime tomography
 
 # Contributors
-1. Serafim Grubas (serafimgrubas@gmail.com)
-2. Nikolay Shilov
-3. Anton Duchkov
-4. Georgy Loginov
+Serafim Grubas (serafimgrubas@gmail.com)
+Nikolay Shilov
+Anton Duchkov
+Georgy Loginov
