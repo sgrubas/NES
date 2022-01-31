@@ -14,6 +14,17 @@ For comparison with existing neural-network solutions see [EikoNet](https://gith
 ```python
 !pip install git+https://github.com/sgrubas/NES.git
 ```
+## Dependencies
+```python
+!pip install numpy
+!pip install scipy
+!pip install tensorflow
+
+# Optional
+!pip install holoviews # visualization
+!pip install eikonalfm # reference solution
+!pip install tqdm # progress bars
+```
 
 # Quick example
 ```python
