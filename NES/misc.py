@@ -253,6 +253,14 @@ class RegularGrid:
         X = np.stack(X, axis=-1)
         return X
 
+    def sou_rec_pairs(self, xs, xr):
+        Xs = np.expand_dims(xs, axis=tuple(i+len(xs.shape[:-1]) for i in range(len(xr.shape[:-1]))))
+        Xr = np.expand_dims(xr, axis=tuple(i for i in range(len(xs.shape[:-1]))))
+        Xs = np.tile(Xs, (1,)*len(xs.shape[:-1]) + tuple(j for j in xr.shape[:-1]) + (1,))
+        Xr = np.tile(Xr, tuple(j for j in xs.shape[:-1]) + (1,)*len(xr.shape[:-1]) + (1,))
+        return np.concatenate((Xs, Xr), axis=-1)
+
+
 class Uniform_PDF:
     """
         API for generating uniform distribution in a given velocity model
