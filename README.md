@@ -40,6 +40,9 @@ T = Eik.Traveltime(X)
 
 # Contributors
 Serafim Grubas (serafimgrubas@gmail.com)
+
 Nikolay Shilov
+
 Anton Duchkov
+
 Georgy Loginov
