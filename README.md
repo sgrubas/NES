@@ -20,7 +20,7 @@ For comparison with existing neural-network solutions see [EikoNet](https://gith
 import NES
 import numpy as np
 
-Vel = NES.misc.Marmousi(smooth=5)
+Vel = NES.misc.MarmousiSmoothedPart()
 Eik = NES.NES_TP(velocity=Vel)
 Eik.build_model()
 h = Eik.train(x_train=200000, tolerance=7e-3, 
