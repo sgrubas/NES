@@ -1,11 +1,45 @@
-# NES
-Neural Eikonal Solver: framework for solving the eikonal equation using neural networks
+# Neural Eikonal Solver
+**Neural Eikonal Solver (NES)** is framework for solving eikonal equation using neural networks. NES incorporates special features helping to solve the eikonal relatively fast, for details see our [paper](https://github.com/sgrubas/NES).
 
-What is available:
-  1) One-Point NES (NES-OP) for solving one-point eikonal equation 
-  2) Two-Point NES (NES-TP) for solving one-point eikonal equation 
+## Tutorials
+See quick introduction on [Google Colab](https://colab.research.google.com/github/sgrubas/NES/blob/main/notebooks/NES_Introduction.ipynb)
 
+NES has two versions:
+1.   **One-Point NES (NES-OP)** is to solve conventional one-point eikonal ([NES-OP tutorial](https://github.com/sgrubas/NES/blob/main/notebooks/NES-OP_Tutorial.ipynb))
+2.   **Two-Point NES (NES-TP)** is to solve generalized two-point eikonal ([NES-TP tutorial](https://github.com/sgrubas/NES/blob/main/notebooks/NES-TP_Tutorial.ipynb))
 
+For comparison with existing neural-network solutions see [EikoNet](https://github.com/sgrubas/NES/blob/main/notebooks/EikoNet_NES-TP_Marmousi.ipynb) and [PINNeik](https://github.com/sgrubas/NES/blob/main/notebooks/PINNeik_NES-OP_Marmousi.ipynb)
+
+## Installation
 ```python
-solver = NES.NES_OP(xs, velocity)
+!pip install git+https://github.com/sgrubas/NES.git
 ```
+
+# Quick example
+```python
+import NES
+import numpy as np
+
+Vel = NES.misc.Marmousi(smooth=5)
+Eik = NES.NES_TP(velocity=Vel)
+Eik.build_model()
+h = Eik.train(x_train=200000, tolerance=7e-3, 
+              epochs=1000, verbose=0,
+              batch_size=int(num_pts/5))
+
+Xs = NES.misc.RegularGrid(Vel)((5, 5))
+Xr = NES.misc.RegularGrid(Vel)((200, 100))
+X = np.concatenate((Xs, Xr), axis=-1)
+T = Eik.Traveltime(X)
+```
+
+# Future plans
+*  Anisotropic eikonal
+*  Earthquake localization
+*  Traveltime tomography
+
+# Contributors
+1. Serafim Grubas (serafimgrubas@gmail.com)
+2. Nikolay Shilov
+3. Anton Duchkov
+4. Georgy Loginov
