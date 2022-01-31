@@ -24,12 +24,12 @@ Vel = NES.misc.MarmousiSmoothedPart()
 Eik = NES.NES_TP(velocity=Vel)
 Eik.build_model()
 h = Eik.train(x_train=200000, tolerance=7e-3, 
-              epochs=1000, verbose=0,
-              batch_size=int(num_pts/5))
+              epochs=2000, verbose=0,
+              batch_size=40000)
 
-Xs = NES.misc.RegularGrid(Vel)((5, 5))
-Xr = NES.misc.RegularGrid(Vel)((200, 100))
-X = np.concatenate((Xs, Xr), axis=-1)
+grid = NES.misc.RegularGrid(Vel)
+Xs = grid((5, 5)); Xr = grid((200, 100))
+X = grid.sou_rec_pairs(Xs, Xr)
 T = Eik.Traveltime(X)
 ```
 
@@ -39,10 +39,7 @@ T = Eik.Traveltime(X)
 *  Traveltime tomography
 
 # Contributors
-Serafim Grubas (serafimgrubas@gmail.com)
-
-Nikolay Shilov
-
-Anton Duchkov
-
+Serafim Grubas (serafimgrubas@gmail.com) <br>
+Nikolay Shilov <br>
+Anton Duchkov <br>
 Georgy Loginov
