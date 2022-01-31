@@ -234,6 +234,24 @@ def MarmousiSmoothedPart():
         ### GENERATION OF COLLOCATION POINTS ###
 ######################################################
 
+class RegularGrid:
+    """
+        API for generating regular distribution in a given velocity model
+    """
+    limits = None 
+    def __init__(self, velocity):
+        """velocity: velocity class
+        """
+        self.xmins = velocity.xmin
+        self.xmaxs = velocity.xmax
+
+    def __call__(self, axes):
+        """ axes : tuple of ints : (nx, ny, nz)
+        """
+        xi = [np.linspace(self.xmins[i], self.xmaxs[i], axes[i]) for i in range(len(axes))]
+        X = np.meshgrid(*xi, indexing='ij')
+        X = np.stack(X, axis=-1)
+        return X
 
 class Uniform_PDF:
     """
