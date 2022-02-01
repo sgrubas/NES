@@ -33,12 +33,25 @@ X = grid.sou_rec_pairs(Xs, Xr)
 T = Eik.Traveltime(X)
 ```
 
+# Citation
+If you find NES useful for your research, please cite:
+```
+@article{#######,
+  title={Neural Eikonal Solver: mitigating challenges of solving eikonal equation using neural networks},
+  author={########},
+  journal={########},
+  pages={########},
+  year={#######},
+  publisher={#######}
+}
+```
+
 # Future plans
 *  Anisotropic eikonal
 *  Earthquake localization
 *  Traveltime tomography
 
-# Contributors
+# Developers
 Serafim Grubas (serafimgrubas@gmail.com) <br>
 Nikolay Shilov <br>
 Anton Duchkov <br>
