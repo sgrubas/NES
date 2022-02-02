@@ -10,6 +10,7 @@ bin-release/
 NES.egg-info/
 /notebooks/.ipynb_checkpoints
 /notebooks/Models
+/notebooks/testing.ipynb
 
 
 # Executables

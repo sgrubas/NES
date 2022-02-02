@@ -53,7 +53,8 @@ class NES_OP:
         self.x_train = None     # input training data
         self.y_train = None     # output training data
         self.compiled = False   # compilation status
-        self.config = {}        # config data of NN model to be reproducible
+        # config data of NN model to be reproducible
+        self.config = {}
     
     def build_model(self, nl=4, nu=50, act='ad-gauss-1', out_act='ad-sigmoid-1', 
                     input_scale=True, factored=True, out_vscale=True, **kwargs):       
@@ -230,6 +231,7 @@ class NES_OP:
         """
             Creates dictionary according to the input names of model
         """
+        assert x.shape[-1] == velocity.dim, "Dimensions do not coincide"
         X = {}
         for kwi, inp in zip(model.input_names, model.inputs):
             shape = (-1,) + tuple(inp.shape.as_list()[1:])
@@ -329,12 +331,30 @@ class NES_OP:
         h = self.model.fit(*data, **train_kw)
         return h
 
+    @staticmethod
+    def _pack_opt_config(model):
+        if model.optimizer is None: return None
+        opt_config = {}
+        opt_config['optimizer.config'] = model.optimizer.get_config()
+        opt_config['optimizer.weights'] = model.optimizer.get_weights()
+        opt_config['loss'] = model.loss
+        return opt_config
+
+    def _unpack_opt_config(self, opt_config):
+        if opt_config is None: return None
+        optimizer = tf.keras.optimizers.get(opt_config['optimizer.config']['name'])
+        optimizer = optimizer.from_config(opt_config['optimizer.config'])
+        optimizer._create_all_weights(self.model.trainable_variables)
+        optimizer.set_weights(opt_config['optimizer.weights'])
+        self.compile(optimizer=optimizer, loss=opt_config['loss'])
+
     def save(self, filepath, save_optimizer=False, training_data=False):
         """
             Saves the current NES_OP model to `filepath` directory.
             `save_optimizer` saves the optimizer state to continue the training from the last point,
             `training_data` saves the last training set used for training.
         """
+
         config = self.config
         config['velocity'] = self.velocity
         config['xs'] = self.xs
@@ -357,13 +377,9 @@ class NES_OP:
 
         # Optimizer state
         if save_optimizer:
-            opt_config = {}
-            opt_config['optimizer.config'] = self.model.optimizer.get_config()
-            opt_config['optimizer.weights'] = self.model.optimizer.get_weights()
-            opt_config['loss'] = self.model.loss
             opt_filename = filepath + f'/{filename}_optimizer'
             with open(opt_filename, 'wb') as f: 
-                pickle.dump(opt_config, f)
+                pickle.dump(NES_OP._pack_opt_config(self.model), f)
 
         # Training set of collocation points
         if training_data:
@@ -391,6 +407,7 @@ class NES_OP:
             config = pickle.load(f)
 
         # Loading configuration
+        # TODO anisotropy
         eikonal = IsoEikonal.from_config(config.pop('equation.config'))
         NES_OP_instance = NES_OP(xs=config.pop('xs'), 
                                  velocity=config.pop('velocity'), 
@@ -407,11 +424,7 @@ class NES_OP:
         if pathlib.Path(opt_filename).is_file():
             with open(opt_filename, 'rb') as f: 
                 opt_config = pickle.load(f)
-            optimizer = tf.keras.optimizers.get(opt_config['optimizer.config']['name'])
-            optimizer = optimizer.from_config(opt_config['optimizer.config'])
-            optimizer._create_all_weights(NES_OP_instance.model.trainable_variables)
-            optimizer.set_weights(opt_config['optimizer.weights'])
-            NES_OP_instance.compile(optimizer=optimizer, loss=opt_config['loss'])
+            NES_OP_instance._unpack_opt_config(opt_config)
             print('Compiled the model with saved optimizer')
 
         # Loading training data if available
@@ -421,6 +434,31 @@ class NES_OP:
                 NES_OP_instance.x_train = pickle.load(f)
             print('Loaded last training data: see NES_OP.x_train')
 
+        return NES_OP_instance
+
+    def transfer(self, xs=None, velocity=None, eikonal=None):
+        """
+            Transfers trained NES-OP to a new copy
+
+            Arguments:
+                xs: new source location for transfer. If None, previous is used
+                velocity: new velocity for transfer. If None, previous is used
+                eikonal: new eikonal equation for transfer. If None, previous is used
+
+            Returns:
+                NES_OP instance: new NES_OP with transfered achitecture (trained weights)
+        """
+        if xs is None:
+            xs = self.xs
+        if velocity is None:
+            velocity = self.velocity
+        if eikonal is None:
+            eikonal = self.equation
+
+        NES_OP_instance = NES_OP(xs=xs, velocity=velocity, eikonal=eikonal)
+        NES_OP_instance.build_model(**self.config)
+        NES_OP_instance.outs['T'].set_weights(self.outs['T'].get_weights())
+        NES_OP_instance._unpack_opt_config(NES_OP._pack_opt_config(self.model))
         return NES_OP_instance
 
 
@@ -463,9 +501,6 @@ class NES_TP:
         self.y_train = None     # output training data
         self.compiled = False   # compilation status
         self.config = {}        # config data of NN model to be reproducible
-        self.losses = ['Er']    # outputs for training losses. Since this is Two-Point formulation, 
-                                # we can solve two eikonal equations according to the reciprocity principle.
-                                # 'Er' is equation w.r.t. 'xr', 'Es' is equation w.r.t. 'xr'.
         
     def build_model(self, nl=4, nu=50, act='lad-gauss-1', out_act='lad-sigmoid-1', 
                     factored=True, out_vscale=True, input_scale=True, reciprocity=True, **kwargs):
@@ -494,6 +529,11 @@ class NES_TP:
         if kwargs.get('kernel_initializer') is None:
             kwargs['kernel_initializer'] = 'he_normal'
 
+        # outputs for training losses. Since this is Two-Point formulation, 
+        # we can solve two eikonal equations according to the reciprocity principle.
+        # 'Er' is equation w.r.t. 'xr', 'Es' is equation w.r.t. 'xr'.
+        losses = kwargs.pop('losses', None)
+
         # Saving configuration for reproducibility, to save and load model
         self.config['nl'] = nl
         self.config['nu'] = nu
@@ -503,7 +543,7 @@ class NES_TP:
         self.config['factored'] = factored
         self.config['out_vscale'] = out_vscale
         self.config['reciprocity'] = reciprocity
-        self.config['losses'] = self.losses
+        self.config['losses'] = losses
         for kw, v in kwargs.items():
             self.config[kw] = v
 
@@ -598,8 +638,9 @@ class NES_TP:
 
         #### Trainable model ####
         kw_models = dict(Er=Er, Es=Es)
-        model_outputs = [kw_models[kw] for kw in self.losses]
-        model_inputs = inputs + [vr] * ('Er' in self.losses) + [vs] * ('Es' in self.losses)
+        if losses is None: losses = ['Er']
+        model_outputs = [kw_models[kw] for kw in losses]
+        model_inputs = inputs + [vr] * ('Er' in losses) + [vs] * ('Es' in losses)
         self.model = Model(inputs=model_inputs, outputs=model_outputs)
 
         #### All callable models ####
@@ -774,6 +815,7 @@ class NES_TP:
     @staticmethod
     def _prepare_inputs(model, x, velocity):
         dim = velocity.dim
+        assert x.shape[-1] == 2*dim, "Dimensions do not coincide"
         xs = x[..., :dim]
         xr = x[..., dim:]
         vx = {'vs': xs, 'vr': xr}
@@ -885,6 +927,23 @@ class NES_TP:
         h = self.model.fit(*data, **train_kw)
         return h
 
+    @staticmethod
+    def _pack_opt_config(model):
+        if model.optimizer is None: return None
+        opt_config = {}
+        opt_config['optimizer.config'] = model.optimizer.get_config()
+        opt_config['optimizer.weights'] = model.optimizer.get_weights()
+        opt_config['loss'] = model.loss
+        return opt_config
+
+    def _unpack_opt_config(self, opt_config):
+        if opt_config is None: return None
+        optimizer = tf.keras.optimizers.get(opt_config['optimizer.config']['name'])
+        optimizer = optimizer.from_config(opt_config['optimizer.config'])
+        optimizer._create_all_weights(self.model.trainable_variables)
+        optimizer.set_weights(opt_config['optimizer.weights'])
+        self.compile(optimizer=optimizer, loss=opt_config['loss'])
+
     def save(self, filepath, save_optimizer=False, training_data=False):
         """
             Saves the current NES_OP model to `filepath` directory.
@@ -914,13 +973,9 @@ class NES_TP:
 
         # Optimizer state
         if save_optimizer:
-            opt_config = {}
-            opt_config['optimizer.config'] = self.model.optimizer.get_config()
-            opt_config['optimizer.weights'] = self.model.optimizer.get_weights()
-            opt_config['loss'] = self.model.loss
             opt_filename = filepath + f'/{filename}_optimizer'
             with open(opt_filename, 'wb') as f: 
-                pickle.dump(opt_config, f)
+                pickle.dump(NES_TP._pack_opt_config(self.model), f)
 
         # Training set of collocation points
         if training_data:
@@ -948,6 +1003,7 @@ class NES_TP:
             config = pickle.load(f)
 
         # Loading configuration
+        # TODO anisotropy
         eikonal = IsoEikonal.from_config(config.pop('equation.config'))
         NES_TP_instance = NES_TP(velocity=config.pop('velocity'), 
                                  eikonal=eikonal)
@@ -966,11 +1022,7 @@ class NES_TP:
         if pathlib.Path(opt_filename).is_file():
             with open(opt_filename, 'rb') as f: 
                 opt_config = pickle.load(f)
-            optimizer = tf.keras.optimizers.get(opt_config['optimizer.config']['name'])
-            optimizer = optimizer.from_config(opt_config['optimizer.config'])
-            optimizer._create_all_weights(NES_TP_instance.model.trainable_variables)
-            optimizer.set_weights(opt_config['optimizer.weights'])
-            NES_TP_instance.compile(optimizer=optimizer, loss=opt_config['loss'])
+            NES_TP_instance._unpack_opt_config(opt_config)
             print('Compiled the model with saved optimizer')
 
         # Loading training data if available
@@ -980,4 +1032,26 @@ class NES_TP:
                 NES_TP_instance.x_train = pickle.load(f)
             print('Loaded last training data: see NES_TP.x_train')
 
+        return NES_TP_instance
+
+    def transfer(self, velocity=None, eikonal=None):
+        """
+            Transfers trained NES-TP to a new copy
+
+            Arguments:
+                velocity: new velocity for transfer. If None, previous is used
+                eikonal: new eikonal equation for transfer. If None, previous is used
+
+            Returns:
+                NES_TP instance: new NES_TP with transfered achitecture (trained weights)
+        """
+        if velocity is None:
+            velocity = self.velocity
+        if eikonal is None:
+            eikonal = self.equation
+
+        NES_TP_instance = NES_TP(velocity=velocity, eikonal=eikonal)
+        NES_TP_instance.build_model(**self.config)
+        NES_TP_instance.outs['T'].set_weights(self.outs['T'].get_weights())
+        NES_TP_instance._unpack_opt_config(NES_TP._pack_opt_config(self.model))
         return NES_TP_instance
