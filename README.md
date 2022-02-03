@@ -30,10 +30,10 @@ import NES
 Vel = NES.misc.MarmousiSmoothedPart()
 Eik = NES.NES_TP(velocity=Vel)
 Eik.build_model()
-h = Eik.train(x_train=200000, epochs=2000, batch_size=40000)
+h = Eik.train(x_train=100000, epochs=1000, batch_size=25000)
 
 grid = NES.misc.RegularGrid(Vel)
-Xs = grid((5, 5)); Xr = grid((200, 100))
+Xs = grid((5, 5)); Xr = grid((100, 100))
 X = grid.sou_rec_pairs(Xs, Xr)
 T = Eik.Traveltime(X)
 ```
