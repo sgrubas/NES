@@ -14,18 +14,18 @@ class Interpolator:
         Interpolator using 'scipy.interpolate.RegularGridInterpolator'
 
     """    
-    dim = None
-    F = None
+    dim = None # used in NES
+    F = None 
     dF = None
     LF = None
     axes = None
-    Func = None
+    Func = None # used in NES
     dFunc = None
     LFunc = None
-    xmin = None
-    xmax = None
-    min = None
-    max = None
+    xmin = None # used in NES
+    xmax = None # used in NES
+    min = None # used in NES
+    max = None # used in NES
 
     def __init__(self, F, *axes, **interp_kw):
         """
@@ -253,7 +253,12 @@ class RegularGrid:
         X = np.stack(X, axis=-1)
         return X
 
-    def sou_rec_pairs(self, xs, xr):
+    @staticmethod
+    def sou_rec_pairs(xs, xr):
+        xs, xr = np.array(xs, ndmin=2), np.array(xr, ndmin=2)
+        assert xr.shape[-1] == xs.shape[-1]
+        dim = xs.shape[-1]
+
         Xs = np.expand_dims(xs, axis=tuple(i+len(xs.shape[:-1]) for i in range(len(xr.shape[:-1]))))
         Xr = np.expand_dims(xr, axis=tuple(i for i in range(len(xs.shape[:-1]))))
         Xs = np.tile(Xs, (1,)*len(xs.shape[:-1]) + tuple(j for j in xr.shape[:-1]) + (1,))
