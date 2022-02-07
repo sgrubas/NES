@@ -5,7 +5,7 @@ from tensorflow.keras.layers.experimental.preprocessing import Rescaling
 from tensorflow.keras.models import Model
 from .utils import DenseBody, Diff, SourceLoc, NES_EarlyStopping, data_handler
 from .eikonalLayers import IsoEikonal
-from .misc import Interpolator, Uniform_PDF
+from .misc import Interpolator, Uniform_PDF, RegularGrid
 import pickle, pathlib, shutil
 
 ###############################################################################
@@ -772,6 +772,49 @@ class NES_TP:
         """        
         return self._predict(x, 'Hs', **kwargs)
 
+    def Multisource(self, Xs, Xr, **kwargs):
+        """
+            Computes first-arrival traveltimes from complex source 'Xs' (e.g. line).
+    
+            Arguments:
+                Xs: float array (Ns, dim) : source coordinates (potentially it can be multiple sources, e.g. line)
+                Xr: float array (Nr, dim) : receiver points
+            
+            Returns:
+                T: float array (Nr,) : traveltimes from multisource 'Xs' to receivers 'Xr'
+        """
+        X = RegularGrid.sou_rec_pairs(Xs, Xr)
+        T = self.Traveltime(X, **kwargs)
+        if Xs[..., 0].size > 1:
+            ndim = len(Xs.shape[:-1])
+            T = T.min(axis=tuple(i for i in range(ndim)))
+        return T
+
+    def Reflection(self, Xs, Xd, Xr, **kwargs):
+        """
+            Simulates traveltimes of the wave originated in source 'xs' and reflected at 'xd'.
+    
+            Arguments:
+                Xs: float array (Ns, dim) : source coordinates (potentially it can be multiple sources, e.g. line)
+                Xd: float array (Nd, dim) : diffractions points for simulation of reflection
+                Xr: float array (Nr, dim) : receiver points
+
+            Returns:
+                Ts: float array (Nr,) : traveltimes from (multi)source 'Xs' to receivers 'Xr'
+                Td: float array (Nr,) : reflection traveltimes from 'Xd'
+
+        """
+        Xs = np.array(Xs, ndmin=2)
+        Ts = self.Multisource(Xs, Xr, **kwargs)
+        Tsd = self.Multisource(Xs, Xd, **kwargs)
+        X = RegularGrid.sou_rec_pairs(Xd, Xr)
+        Td = self.Traveltime(X, **kwargs)
+        ndim = len(Tsd.shape)
+        Tsd = np.expand_dims(Tsd, axis=tuple(i+len(Tsd.shape) for i in range(len(Xr.shape[:-1]))))
+        Td += Tsd
+        Trefl = Td.min(axis=tuple(i for i in range(ndim)))
+        return Ts, Trefl
+
     def Raylets(self, xs1, xs2, Xc, traveltimes=False, **kwargs):
         """ 
             Computes the norm of gradient of combined traveltime field between 'xs1' and 'xs2'. 
@@ -795,13 +838,9 @@ class NES_TP:
                 grad_c T_12 : gradient of combined traveltime field between 'xs1' and 'xs2'
                 T_12 : combined traveltime field (if `traveltimes` is True)
         """
-        dims = Xc.shape[:-1]
-        xs1 = np.array(xs1).squeeze().reshape([1]*len(dims) + [len(xs1)])
-        xs2 = np.array(xs2).squeeze().reshape([1]*len(dims) + [len(xs2)])
-
-        Xc1 = np.concatenate((np.tile(xs1, Xc.shape[:-1] + (1,)), Xc), axis=-1)
+        Xc1 = RegularGrid.sou_rec_pairs(xs1, Xc)
         dTc = self.GradientR(Xc1, **kwargs)
-        Xc2 = np.concatenate((Xc, np.tile(xs2, Xc.shape[:-1] + (1,))), axis=-1)
+        Xc2 = RegularGrid.sou_rec_pairs(Xc, xs2)
         dTc += self.GradientS(Xc2, **kwargs)
         abs_dTc = np.linalg.norm(dTc, axis=-1).reshape(Xc.shape[:-1])
 
