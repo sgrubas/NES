@@ -1,6 +1,13 @@
 # Neural Eikonal Solver
 **Neural Eikonal Solver (NES)** is framework for solving eikonal equation using neural networks. NES incorporates special features helping to solve the eikonal relatively fast, for details see our [paper](https://github.com/sgrubas/NES).
 
+## Advantages
+Compared to finite-difference solvers *2nd-order Fast Marching (FMM2)* and *2nd-order factored Fast Marching (f-FMM2)*:
+*  On sparse grids NES outperforms both FMM2 and f-FMM2
+*  On fine grids NES competes with f-FMM2 and outperforms FMM2
+*  NES provides accurate first and second derivatives of solution
+*  NES is a compact representation for large number of sources and receivers
+
 ## Tutorials
 See quick introduction on [Google Colab](https://colab.research.google.com/github/sgrubas/NES/blob/main/notebooks/NES_Introduction.ipynb)
 
@@ -30,10 +37,10 @@ import NES
 Vel = NES.misc.MarmousiSmoothedPart()
 Eik = NES.NES_TP(velocity=Vel)
 Eik.build_model()
-h = Eik.train(x_train=200000, epochs=2000, batch_size=40000)
+h = Eik.train(x_train=100000, epochs=1000, batch_size=25000)
 
 grid = NES.misc.RegularGrid(Vel)
-Xs = grid((5, 5)); Xr = grid((200, 100))
+Xs = grid((5, 5)); Xr = grid((100, 100))
 X = grid.sou_rec_pairs(Xs, Xr)
 T = Eik.Traveltime(X)
 ```
