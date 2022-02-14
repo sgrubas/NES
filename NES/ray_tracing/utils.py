@@ -49,7 +49,7 @@ def nes_op_rts_right_part(ray_time, x_vec, nes_op, direction, vel_func=None):
     return r_part
 
 
-def nintegrate_ode_system(rhs_func, y_0, x, **kwargs):
+def nintegrate_ode_system(rhs_func, y_0, x, args=(), **kwargs):
     """
     Integrates a system of ODEs dy / dx == rhs_func(x, y), y(x[0]) == y_0 using fourth order
 
@@ -63,8 +63,11 @@ def nintegrate_ode_system(rhs_func, y_0, x, **kwargs):
         x: numpy array (N,)
             Array of X-coordinates at which to evaluate the solutions
 
+        args: tuple
+            Additional positional arguments for the rhs_func
+
         kwargs: dict
-            Dictionary of additional arguments for the rhs_func
+            Additional keyword arguments for the rhs_func
 
     Returns:
         y: numpy array (N, D)
@@ -94,10 +97,10 @@ def nintegrate_ode_system(rhs_func, y_0, x, **kwargs):
         step_curr = steps[i]
 
         # Runge-Kutta terms:
-        k_1 = rhs_func(x_curr, y_curr, **kwargs)
-        k_2 = rhs_func(x_curr + step_curr / 2, y_curr + step_curr / 2 * k_1, **kwargs)
-        k_3 = rhs_func(x_curr + step_curr / 2, y_curr + step_curr / 2 * k_2, **kwargs)
-        k_4 = rhs_func(x_curr + step_curr, y_curr + step_curr * k_3, **kwargs)
+        k_1 = rhs_func(x_curr, y_curr, *args, **kwargs)
+        k_2 = rhs_func(x_curr + step_curr / 2, y_curr + step_curr / 2 * k_1, *args, **kwargs)
+        k_3 = rhs_func(x_curr + step_curr / 2, y_curr + step_curr / 2 * k_2, *args, **kwargs)
+        k_4 = rhs_func(x_curr + step_curr, y_curr + step_curr * k_3, *args, **kwargs)
 
         # Find the solution at the next step:
         y[i + 1] = y_curr + (k_1 + 2 * k_2 + 2 * k_3 + k_4) * step_curr / 6

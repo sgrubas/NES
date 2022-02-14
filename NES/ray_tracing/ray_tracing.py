@@ -7,14 +7,14 @@ from .utils import nes_op_rts_right_part, nintegrate_ode_system, directions_dict
 solvers = ["specified steps", "scipy"]
 
 
-def nes_op_tracing(x_0,
-                   num_points,
-                   nes_op,
-                   solver="specified steps",
-                   direction="backward",
-                   target_front=0.001,
-                   vel_func=None,
-                   **kwargs):
+def nes_op_ray_tracing(x_0,
+                       num_points,
+                       nes_op,
+                       solver="specified steps",
+                       direction="backward",
+                       target_front=0.01,
+                       vel_func=None,
+                       **kwargs):
     """
     Traces a ray given the receiver / starting point and a trained NES-OP network. The resulting ray is sorted in
     traveltime-increasing order.
@@ -99,9 +99,58 @@ def nes_op_tracing(x_0,
         ray = nintegrate_ode_system(nes_op_rts_right_part,
                                     x_0,
                                     ray_travel_times,
-                                    nes_op=nes_op,
-                                    direction=direction,
-                                    vel_func=vel_func)
+                                    args=[nes_op, direction, vel_func])
 
     # Return the ray:
     return ray[:: directions_dict[direction]]
+
+
+def nes_op_ray_amplitude(ray,
+                         nes_op,
+                         vel_func=None):
+    """
+    Computes ray amplitude using a trained NES-OP network and assuming close source vicinity initial conditions.
+
+    Arguments:
+        ray: numpy array (N, D)
+            Array of ray points in D-dimensional space sorted in time-increasing order. The first point must be at some
+            distance from the source
+
+        nes_op: NES-OP network
+            A trained instance of the NES-OP network
+
+        vel_func: callable
+            Function accepting point coordinates as argument and returning wave velocity in this point
+
+    Returns:
+        amplitude: number
+            Ray amplitude in the receiver
+
+    """
+
+    # Problem dimensions:
+    dims = np.shape(ray)[- 1]
+
+
+    # Travel times along the ray:
+    ray_times = np.squeeze(nes_op.Traveltime(ray))
+
+    # Travel time Laplacians along the ray:
+    laplacians = np.squeeze(nes_op.Laplacian(ray))
+
+    # Ray velocities:
+    if callable(vel_func):
+
+        ray_vels = np.squeeze(vel_func(ray))
+
+    else:
+
+        ray_vels = np.squeeze(1 / np.sqrt(np.sum(nes_op.Gradient(ray) ** 2, axis=- 1)))
+
+    # Initial-front amplitude:
+    start_ampl = np.sqrt(ray_vels[0]) / np.sqrt(np.sum((nes_op.xs - ray[0]) ** 2)) ** (dims - 1)
+
+    # Ray amplitude in the receiver:
+    amplitude = start_ampl * np.exp(- 1 / 2 * np.trapz(ray_vels ** 2 * laplacians, ray_times))
+
+    return amplitude
