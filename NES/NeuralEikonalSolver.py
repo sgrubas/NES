@@ -901,7 +901,7 @@ class NES_TP:
         for nm, otp in zip(self.model.output_names, self.model.outputs):
             self.y_train[nm] = np.zeros((len(xi),) + tuple(otp.shape.as_list()[1:]))
 
-    def compile(self, optimizer=None, loss='mae', lr=3e-3, decay=5e-4, **kwargs):
+    def compile(self, optimizer=None, loss='mae', lr=5e-3, decay=5e-4, **kwargs):
         """
             Compiles the neural-network model for training.
 
