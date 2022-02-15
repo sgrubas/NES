@@ -1,19 +1,19 @@
 import numpy as np
 from scipy.integrate import solve_ivp
 
-from .utils import nes_op_rts_right_part, nintegrate_ode_system, directions_dict
+from .utils import nes_op_rts_right_part, nintegrate_ode_system, directions_dict, velocities_list
 
 # Available solvers:
-solvers = ["specified steps", "scipy"]
+solvers_list = ["specified steps", "scipy"]
 
 
 def nes_op_ray_tracing(x_0,
                        num_points,
                        nes_op,
+                       target_front=0.01,
                        solver="specified steps",
                        direction="backward",
-                       target_front=0.01,
-                       vel_func=None,
+                       velocity="interpolation",
                        **kwargs):
     """
     Traces a ray given the receiver / starting point and a trained NES-OP network. The resulting ray is sorted in
@@ -29,6 +29,9 @@ def nes_op_ray_tracing(x_0,
         nes_op: NES-OP network
             A trained instance of the NES-OP network
 
+        target_front: positive number
+            Time of the target wavefront
+
         solver: string
             ODE solver. Two options are supported: "specified steps" (straightforward implementation of the Runge-Kutta
             method of 4th order without any accuracy checks) and "scipy" (scipy.integrate.solve_ivp)
@@ -36,11 +39,10 @@ def nes_op_ray_tracing(x_0,
         direction: "forward" or "backward"
             Tracing direction (forwards or backwards in time)
 
-        target_front: positive number
-            Time of the target wavefront
-
-        vel_func: callable
-            Function accepting point coordinates as argument and returning wave velocity in this point
+        velocity: string
+            String defining how to evaluate wave velocity along the ray. Two options are supported: "interpolation"
+            (use training velocity interpolation) and "learned velocity" (use inverse of the slowness, i.e. eikonal
+            gradient)
 
         **kwargs: dictionary
             Keyword arguments for scipy.integrate.solve_ivp function
@@ -51,10 +53,12 @@ def nes_op_ray_tracing(x_0,
 
     """
 
-    assert solver in solvers, ("Two solvers are supported: 'specified steps' and 'scipy'. " +
-                               "Instead {} is passed.".format(solver))
+    assert solver in solvers_list, ("Two solvers are supported: 'specified steps' and 'scipy'. " +
+                                    "Instead {} is passed.".format(solver))
     assert direction in directions_dict, ("Two directions are supported: 'forward' and 'backward'. " +
                                           "Instead {} is passed.".format(direction))
+    assert velocity in velocities_list, ("Two options are supported for velocity evaluation: 'interpolation' and " +
+                                         "'learned velocity'.")
 
     # Time in the starting point:
     time_0 = np.squeeze(nes_op.Traveltime(np.atleast_2d(x_0)))
@@ -90,7 +94,7 @@ def nes_op_ray_tracing(x_0,
         ray = np.transpose(solve_ivp(nes_op_rts_right_part,
                                      t_span=[ray_travel_times[0], ray_travel_times[- 1]],
                                      y0=x_0,
-                                     args=[nes_op, direction, vel_func],
+                                     args=[nes_op, direction, velocity],
                                      t_eval=ray_travel_times,
                                      **kwargs).y)
 
@@ -99,7 +103,7 @@ def nes_op_ray_tracing(x_0,
         ray = nintegrate_ode_system(nes_op_rts_right_part,
                                     x_0,
                                     ray_travel_times,
-                                    args=[nes_op, direction, vel_func])
+                                    args=[nes_op, direction, velocity])
 
     # Return the ray:
     return ray[:: directions_dict[direction]]
@@ -107,7 +111,7 @@ def nes_op_ray_tracing(x_0,
 
 def nes_op_ray_amplitude(ray,
                          nes_op,
-                         vel_func=None):
+                         velocity="interpolation"):
     """
     Computes ray amplitude using a trained NES-OP network and assuming close source vicinity initial conditions.
 
@@ -119,8 +123,10 @@ def nes_op_ray_amplitude(ray,
         nes_op: NES-OP network
             A trained instance of the NES-OP network
 
-        vel_func: callable
-            Function accepting point coordinates as argument and returning wave velocity in this point
+        velocity: string
+            String defining how to evaluate wave velocity along the ray. Two options are supported: "interpolation"
+            (use training velocity interpolation) and "learned velocity" (use inverse of the slowness, i.e. eikonal
+            gradient)
 
     Returns:
         amplitude: number
@@ -128,9 +134,11 @@ def nes_op_ray_amplitude(ray,
 
     """
 
+    assert velocity in velocities_list, ("Two options are supported for velocity evaluation: 'interpolation' and " +
+                                         "'learned velocity'.")
+
     # Problem dimensions:
     dims = np.shape(ray)[- 1]
-
 
     # Travel times along the ray:
     ray_times = np.squeeze(nes_op.Traveltime(ray))
@@ -138,17 +146,20 @@ def nes_op_ray_amplitude(ray,
     # Travel time Laplacians along the ray:
     laplacians = np.squeeze(nes_op.Laplacian(ray))
 
-    # Ray velocities:
-    if callable(vel_func):
+    # Wave velocities along the ray:
+    if velocity == "interpolation":
 
-        ray_vels = np.squeeze(vel_func(ray))
+        ray_vels = np.squeeze(nes_op.velocity(ray))
 
     else:
 
         ray_vels = np.squeeze(1 / np.sqrt(np.sum(nes_op.Gradient(ray) ** 2, axis=- 1)))
 
+    # Wave velocity in the source:
+    start_vel = np.squeeze(nes_op.velocity(nes_op.xs))
+
     # Initial-front amplitude:
-    start_ampl = np.sqrt(ray_vels[0]) / np.sqrt(np.sum((nes_op.xs - ray[0]) ** 2)) ** (dims - 1)
+    start_ampl = np.sqrt(start_vel) / np.sqrt(np.sum((nes_op.xs - ray[0]) ** 2)) ** (dims - 1)
 
     # Ray amplitude in the receiver:
     amplitude = start_ampl * np.exp(- 1 / 2 * np.trapz(ray_vels ** 2 * laplacians, ray_times))

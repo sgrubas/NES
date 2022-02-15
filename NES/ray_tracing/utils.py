@@ -3,8 +3,11 @@ import numpy as np
 # A dictionary for ray directions:
 directions_dict = {"forward": 1, "backward": - 1}
 
+# Velocity types:
+velocities_list = ["interpolation", "learned velocity"]
 
-def nes_op_rts_right_part(ray_time, x_vec, nes_op, direction, vel_func=None):
+
+def nes_op_rts_right_part(ray_time, x_vec, nes_op, direction, velocity="interpolation"):
     """
     Returns the right part of the ray tracing system evaluated at the point specified by the x vector using ray travel
     time as the sampling parameter and solution of the eikonal equation for slowness computation.
@@ -22,8 +25,10 @@ def nes_op_rts_right_part(ray_time, x_vec, nes_op, direction, vel_func=None):
         direction: "forward" or "backward"
             Tracing direction (forwards or backwards in time)
 
-        vel_func: callable
-            Function accepting point coordinates as argument and returning wave velocity in this point
+        velocity: string
+            String defining how to evaluate wave velocity along the ray. Two options are supported: "interpolation"
+            (use training velocity interpolation) and "learned velocity" (use inverse of the slowness, i.e. eikonal
+            gradient)
 
     Return:
         r_part: numpy array (D,)
@@ -31,13 +36,16 @@ def nes_op_rts_right_part(ray_time, x_vec, nes_op, direction, vel_func=None):
 
     """
 
+    assert velocity in velocities_list, ("Two options are supported for velocity evaluation: 'interpolation' and " +
+                                         "'learned velocity'.")
+
     # Slowness vector:
     slow = np.squeeze(nes_op.Gradient(np.atleast_2d(x_vec)))
 
     # Wave velocity:
-    if callable(vel_func):
+    if velocity == "interpolation":
 
-        vel = np.squeeze(vel_func(x_vec))
+        vel = np.squeeze(nes_op.velocity(x_vec))
 
     else:
 
