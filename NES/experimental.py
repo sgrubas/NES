@@ -122,7 +122,7 @@ class LRScheduler(tf.keras.callbacks.Callback):
   def __init__(self,
                monitor='loss',
                bounds=[3e-2, 5e-3],
-               lrs=[5e-3, 1e-3, 5e-4],
+               lrs=[5e-3, 1e-3, 7.5e-4],
                patience=10,
                verbose=0,
                cooldown=5):
