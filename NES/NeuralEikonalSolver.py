@@ -502,7 +502,7 @@ class NES_TP:
         self.compiled = False   # compilation status
         self.config = {}        # config data of NN model to be reproducible
         
-    def build_model(self, nl=4, nu=50, act='lad-gauss-1', out_act='lad-sigmoid-1', 
+    def build_model(self, nl=4, nu=50, act='ad-gauss-1', out_act='ad-sigmoid-1', 
                     factored=True, out_vscale=True, input_scale=True, reciprocity=True, **kwargs):
         """
             Build a neural-network model using Tensorflow.
