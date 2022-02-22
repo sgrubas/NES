@@ -629,12 +629,20 @@ class NES_TP:
         Hr = L.Concatenate(axis=-1, name='Hessian_xr')(Hr_list)
         Hrm = Model(inputs=inputs, outputs=Hr)
 
-        #### Hessians ss
+        #### Full Hessian 'xr'
         Hs_list = []
         for i, dTsi in enumerate(dTs_list):
             Hs_list += Diff(name=f'Hs{i}')([dTsi, xs_list[i:]])
         Hs = L.Concatenate(axis=-1, name='Hessian_xs')(Hs_list)
         Hsm = Model(inputs=inputs, outputs=Hs)
+
+        #### Mixed Hessian 'xs', 'xr'
+        Hsr_list = []
+        for i, dTsi in enumerate(dTs_list):
+            Hsr_list += Diff(name=f'Hsr{i}')([dTsi, xr_list])
+        Hsr = L.Concatenate(axis=-1, name='hessian_xsxr')(Hsr_list)
+        Hsr = L.Reshape((self.dim, self.dim), name='Hessian_xsxr')(Hsr)
+        Hsrm = Model(inputs=inputs, outputs=Hsr)
 
         #### Trainable model ####
         kw_models = dict(Er=Er, Es=Es)
@@ -645,7 +653,7 @@ class NES_TP:
 
         #### All callable models ####
         self.outs = dict(T=Tm, Er=Emr, Es=Ems, Gr=Gr, Gs=Gs, 
-                         Lr=Lrm, Ls=Lsm, Hr=Hrm, Hs=Hsm)
+                         Lr=Lrm, Ls=Lsm, Hr=Hrm, Hs=Hsm, Hsr=Hsrm)
 
     def Traveltime(self, x, **kwargs):
         """
@@ -772,6 +780,25 @@ class NES_TP:
         """        
         return self._predict(x, 'Hs', **kwargs)
 
+    def HessianSR(self, x, **kwargs):
+        """
+            Computes full mixed Hessian w.r.t. 'xs' and 'xr' in a form of:
+            1D: [[tau_dxs_dxr]]
+            2D: [[tau_dxs_dxr, tau_dxs_dyr], 
+                 [tau_dys_dxr, tau_dys_dyr]]
+            3D: [[tau_dxs_dxr, tau_dxs_dyr, tau_dxs_dzr], 
+                 [tau_dys_dxr, tau_dys_dyr, tau_dys_dzr],
+                 [tau_dzs_dxr, tau_dzs_dyr, tau_dzs_dzr]]
+
+            Arguments:
+                x : numpy array (N, dim*2) of floats : Array of source-receiver pairs.
+                **kwargs : keyword arguments : Arguments for tf.keras.models.Model.predict(**kwargs) such as 'batch_size'
+
+            Returns:
+                HessianSR : numpy array (N, dim, dim) of floats
+        """        
+        return self._predict(x, 'Hsr', **kwargs)
+
     def Multisource(self, Xs, Xr, **kwargs):
         """
             Computes first-arrival traveltimes from complex source 'Xs' (e.g. line).
@@ -875,7 +902,9 @@ class NES_TP:
         if kwargs.get('batch_size') is None:
             kwargs['batch_size'] = 100000
         X = self._prepare_inputs(self.outs[out], x, self.velocity)
-        P = self.outs[out].predict(X, **kwargs).reshape(*x.shape[:-1], -1).squeeze()
+        P = self.outs[out].predict(X, **kwargs)
+        shape = x.shape[:-1] + P.shape[1:]
+        P = P.reshape(shape).squeeze()
         return P
 
     def train_inputs(self, x):
