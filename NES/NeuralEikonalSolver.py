@@ -889,13 +889,13 @@ class NES_TP:
         for kwi, inp in zip(model.input_names, model.inputs):
             shape = (-1,) + tuple(inp.shape.as_list()[1:])
             if 'v' in kwi:
-                X[kwi] = velocity(vx[kwi]).reshape(*shape)
+                X[kwi] = velocity(vx[kwi]).reshape(shape)
             elif 'xs' in kwi:
                 i = int(kwi[-1])
-                X[kwi] = xs[..., i].reshape(*shape)
+                X[kwi] = xs[..., i].reshape(shape)
             elif 'xr' in kwi:
                 i = int(kwi[-1])
-                X[kwi] = xr[..., i].reshape(*shape)
+                X[kwi] = xr[..., i].reshape(shape)
         return X
 
     def _predict(self, x, out, **kwargs):
