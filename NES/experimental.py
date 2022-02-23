@@ -185,6 +185,7 @@ class RARsampling(tf.keras.callbacks.Callback):
         super(RARsampling, self).__init__()
 
         self.NES = NES
+        self.tp = TP_solver(NES)
         self.pdf = Uniform_PDF(self.NES.velocity)
         self.m = m
         self.res_pts = res_pts
@@ -221,8 +222,10 @@ class RARsampling(tf.keras.callbacks.Callback):
             return res
 
     def eval_data_generator(self, num_pts):
-        x = self.pdf(num_pts)        
-        if np.any((x == self.NES.xs[None, ...]).prod(axis=-1)):
+        x = self.pdf(num_pts)
+        if self.tp:
+            x = np.concatenate((x, self.pdf(num_pts)), axis=-1)
+        if check_singularities(x, self.NES):
             self.eval_data_generator(num_pts)
             print("Accidentally source point in training set, resetting...")
         x_eval = self.NES._prepare_inputs(self.model, x, self.NES.velocity)
@@ -243,6 +246,7 @@ class ImportanceSampling(tf.keras.callbacks.Callback):
         super(ImportanceSampling, self).__init__()
 
         self.NES = NES
+        self.tp = TP_solver(NES)
         self.num_seeds = num_seeds
         self.x_seeds = None
         if seeds_batch_size is None:
@@ -291,7 +295,7 @@ class ImportanceSampling(tf.keras.callbacks.Callback):
 
     def evaluate_seeds(self,):
         y_eval = self.loss_func(self.model.predict(self.x_seeds, batch_size=self.seeds_batch_size))
-        inds = self.kmeans.predict(self.NES.data_generator.x[:, :self.NES.dim]).squeeze()
+        inds = self.kmeans.predict(self.NES.data_generator.x[:, :self.NES.dim*(1+self.tp)]).squeeze()
         loss = y_eval[inds].squeeze()
         p = loss / np.sum(loss)
         if self.p_min > 0:
@@ -300,9 +304,10 @@ class ImportanceSampling(tf.keras.callbacks.Callback):
         return p
 
     def define_seeds(self,):
-        self.kmeans = KMeans(n_clusters=self.num_seeds, n_init=1).fit(self.NES.data_generator.x[:, :self.NES.dim])
+        c = TP_solver(self.NES)
+        self.kmeans = KMeans(n_clusters=self.num_seeds, n_init=1).fit(self.NES.data_generator.x[:, :self.NES.dim*(1+self.tp)])
         self.seeds = self.kmeans.cluster_centers_
-        if np.any((self.seeds == self.NES.xs[None, ...]).prod(axis=-1)):
+        if check_singularities(self.seeds, self.NES):
             self.define_seeds()
             print("Accidentally source point in training set, resetting...")
         self.x_seeds = self.NES._prepare_inputs(self.model, self.seeds, self.NES.velocity)
@@ -321,6 +326,7 @@ class ImportanceWeighting(tf.keras.callbacks.Callback):
         super(ImportanceWeighting, self).__init__()
 
         self.NES = NES
+        self.tp = TP_solver(NES)
         self.num_seeds = num_seeds
         self.w_lims = w_lims
         self.x_seeds = None
@@ -341,7 +347,7 @@ class ImportanceWeighting(tf.keras.callbacks.Callback):
 
     def evaluate_weights(self,):
         y_eval = self.loss_func(self.model.predict(self.x_seeds, batch_size=self.seeds_batch_size))
-        x_train = self.NES.data_generator.x[:, :self.NES.dim]
+        x_train = self.NES.data_generator.x[:, :self.NES.dim*(1+self.tp)]
         if len(y_eval) < len(x_train):
             inds = self.kmeans.predict(x_train).squeeze()
             loss = y_eval[inds].squeeze()
@@ -355,9 +361,9 @@ class ImportanceWeighting(tf.keras.callbacks.Callback):
 
     def define_seeds(self,):
         if self.num_seeds is not None:
-            self.kmeans = KMeans(n_clusters=self.num_seeds, n_init=1).fit(self.NES.data_generator.x[:, :self.NES.dim])
+            self.kmeans = KMeans(n_clusters=self.num_seeds, n_init=1).fit(self.NES.data_generator.x[:, :self.NES.dim*(1+self.tp)])
             self.seeds = self.kmeans.cluster_centers_
-            if np.any((self.seeds == self.NES.xs[None, ...]).prod(axis=-1)):
+            if check_singularities(self.seeds, self.NES):
                 self.define_seeds()
                 print("Accidentally source point in training set, resetting...")
             self.x_seeds = self.NES._prepare_inputs(self.model, self.seeds, self.NES.velocity)
@@ -369,3 +375,17 @@ class ImportanceWeighting(tf.keras.callbacks.Callback):
                 self.seeds_batch_size = self.NES.data_generator.batch_size
             else:
                 self.seeds_batch_size = self.num_seeds
+
+def TP_solver(NES):
+    if getattr(NES, 'xs', False):
+        return False
+    else:
+        return True
+
+def check_singularities(x, NES):
+    if not TP_solver(NES):
+        if np.any((x == NES.xs[None, ...]).prod(axis=-1)):
+            return True
+    else:
+        if np.any((x[..., :NES.dim] == x[..., NES.dim:]).prod(axis=-1)):
+            return True 
