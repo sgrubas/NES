@@ -3,7 +3,7 @@ import numpy as np
 import tensorflow.keras.layers as L
 from tensorflow.keras.layers.experimental.preprocessing import Rescaling
 from tensorflow.keras.models import Model
-from .utils import DenseBody, Diff, SourceLoc, NES_EarlyStopping, data_handler
+from .utils import DenseBody, Diff, SourceLoc, NES_EarlyStopping, data_handler, Activation
 from .eikonalLayers import IsoEikonal
 from .misc import Interpolator, Uniform_PDF, RegularGrid
 import pickle, pathlib, shutil
@@ -566,17 +566,7 @@ class NES_TP:
             X_sc = X
 
         #### Trainable body
-        T = DenseBody(X_sc, nu, nl, out_dim=1, act=act, out_act=out_act, **kwargs)
-
-        #### Factorization
-        # Scaling to the range of [1/vmax , 1/vmin]. T is assumed to be in [0, 1]
-        if out_vscale:
-            vmin, vmax = self.velocity.min, self.velocity.max
-            T = L.Lambda(lambda z: (1 / vmin - 1 / vmax) * z + 1 / vmax, name='V_factor')(T)
-        if factored:
-            xr_xs = L.Subtract(name='xr_xs_difference')([xr, xs])
-            D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='D_factor')(xr_xs)    
-            T = L.Multiply(name='Traveltime')([T, D])
+        T = DenseBody(X_sc, nu, nl, out_dim=1, act=act, out_act='linear', **kwargs)
 
         #### Reciprocity 
         if reciprocity: # T(xs,xr)=T(xr,xs)
@@ -584,6 +574,19 @@ class NES_TP:
             xsr = xs_list + xr_list; xrs = xr_list + xs_list;
             tsr = t(xsr); trs = t(xrs)
             T = L.Lambda(lambda x: 0.5*(x[0] + x[1]), name='Reciprocity')([tsr, trs])
+
+        #### Output activation
+        T = L.Dense(1, activation=Activation(out_act), **kwargs)(T)
+        # Scaling to the range of [1/vmax , 1/vmin]. T is assumed to be in [0, 1]
+        if out_vscale:
+            vmin, vmax = self.velocity.min, self.velocity.max
+            T = L.Lambda(lambda z: (1 / vmin - 1 / vmax) * z + 1 / vmax, name='V_factor')(T)
+
+        #### Factorization
+        if factored:
+            xr_xs = L.Subtract(name='xr_xs_difference')([xr, xs])
+            D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='D_factor')(xr_xs)    
+            T = L.Multiply(name='Traveltime')([T, D])
 
         #### Final Traveltime Model
         Tm = Model(inputs=inputs, outputs=T)
