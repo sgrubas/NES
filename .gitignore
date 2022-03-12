@@ -11,7 +11,7 @@ NES.egg-info/
 /notebooks/.ipynb_checkpoints
 /notebooks/Models
 /notebooks/testing.ipynb
-
+/notebooks/testing3D.ipynb
 
 # Executables
 *.swf
