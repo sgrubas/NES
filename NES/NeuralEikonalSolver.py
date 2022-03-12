@@ -23,7 +23,7 @@ class NES_OP:
         eikonal : instance of tf.keras.layers.Layer : Layer that mimics the eikonal equation. 
                   There must two inputs: list of spatial derivatives, velocity value. 
                   Format example - 'eikonal([tau_x, tau_y, tau_z], v(x, y, z))'. 
-                  If 'None', 'eikonalLayers.IsoEikonal(P=3, hamiltonian=True)' is used.
+                  If 'None', 'eikonalLayers.IsoEikonal(P=2, hamiltonian=True)' is used.
 
     """
     def __init__(self, xs, velocity, eikonal=None):
@@ -367,7 +367,7 @@ class NES_OP:
         filename = filepath.split('/')[-1].split('.')[0]
 
         # Model configuration
-        config_filename = filepath + f'/{filename}_config'
+        config_filename = f'{filepath}/{filename}_config.pkl'
         with open(config_filename, 'wb') as f: 
             pickle.dump(config, f)
 
@@ -377,13 +377,13 @@ class NES_OP:
 
         # Optimizer state
         if save_optimizer:
-            opt_filename = filepath + f'/{filename}_optimizer'
+            opt_filename = f'{filepath}/{filename}_optimizer.pkl'
             with open(opt_filename, 'wb') as f: 
                 pickle.dump(NES_OP._pack_opt_config(self.model), f)
 
         # Training set of collocation points
         if training_data:
-            data_filename = filepath + f'/{filename}_train_data'
+            data_filename = f'{filepath}/{filename}_train_data.pkl'
             with open(data_filename, 'wb') as f: 
                 pickle.dump(self.x_train, f)
 
@@ -402,7 +402,7 @@ class NES_OP:
         filename = filepath.split('/')[-1].split('.')[0]
 
         # Importing configuration data
-        config_filename = filepath + f'/{filename}_config'
+        config_filename = f'{filepath}/{filename}_config.pkl'
         with open(config_filename, 'rb') as f: 
             config = pickle.load(f)
 
@@ -420,7 +420,7 @@ class NES_OP:
         print(f'Loaded model from "{filepath}"')
 
         # Loading optimizer state if available
-        opt_filename = filepath + f'/{filename}_optimizer'
+        opt_filename = f'{filepath}/{filename}_optimizer.pkl'
         if pathlib.Path(opt_filename).is_file():
             with open(opt_filename, 'rb') as f: 
                 opt_config = pickle.load(f)
@@ -428,7 +428,7 @@ class NES_OP:
             print('Compiled the model with saved optimizer')
 
         # Loading training data if available
-        data_filename = filepath + f'/{filename}_train_data'
+        data_filename = f'{filepath}/{filename}_train_data.pkl'
         if pathlib.Path(data_filename).is_file():
             with open(data_filename, 'rb') as f: 
                 NES_OP_instance.x_train = pickle.load(f)
@@ -476,7 +476,7 @@ class NES_TP:
         eikonal : instance of tf.keras.layers.Layer : Layer that mimics the eikonal equation. 
                   There must be two inputs: list of spatial derivatives, velocity value. 
                   Format example - 'eikonal([tau_x, tau_y, tau_z], v(x, y, z))'. 
-                  If 'None', 'eikonalLayers.IsoEikonal(P=3, hamiltonian=True)' is used.
+                  If 'None', 'eikonalLayers.IsoEikonal(P=2, hamiltonian=True)' is used.
     """
 
     def __init__(self, velocity, eikonal=None):
@@ -1032,25 +1032,25 @@ class NES_TP:
         filename = filepath.split('/')[-1].split('.')[0]
 
         # Model configuration
-        config_filename = filepath + f'/{filename}_config'
+        config_filename = f'{filepath}/{filename}_config.pkl'
         with open(config_filename, 'wb') as f: 
             pickle.dump(config, f)
 
         # Model weights
-        weights_filename = filepath + f'/{filename}_weights'
+        weights_filename = f'{filepath}/{filename}_weights.pkl'
         weights = self.outs['T'].get_weights()
         with open(weights_filename, 'wb') as f: 
             pickle.dump(weights, f)
 
         # Optimizer state
         if save_optimizer:
-            opt_filename = filepath + f'/{filename}_optimizer'
+            opt_filename = f'{filepath}/{filename}_optimizer.pkl'
             with open(opt_filename, 'wb') as f: 
                 pickle.dump(NES_TP._pack_opt_config(self.model), f)
 
         # Training set of collocation points
         if training_data:
-            data_filename = filepath + f'/{filename}_train_data'
+            data_filename = f'{filepath}/{filename}_train_data.pkl'
             with open(data_filename, 'wb') as f: 
                 pickle.dump(self.x_train, f)
 
@@ -1069,7 +1069,7 @@ class NES_TP:
         filename = filepath.split('/')[-1].split('.')[0]
 
         # Importing configuration data
-        config_filename = filepath + f'/{filename}_config'
+        config_filename = f'{filepath}/{filename}_config.pkl'
         with open(config_filename, 'rb') as f: 
             config = pickle.load(f)
 
@@ -1082,14 +1082,14 @@ class NES_TP:
         NES_TP_instance.build_model(**config)
         
         # Loading weights
-        weights_filename = filepath + f'/{filename}_weights'
+        weights_filename = f'{filepath}/{filename}_weights.pkl'
         with open(weights_filename, 'rb') as f: 
             weights = pickle.load(f)
         NES_TP_instance.outs['T'].set_weights(weights)
         print(f'Loaded model from "{filepath}"')
 
         # Loading optimizer state if available
-        opt_filename = filepath + f'/{filename}_optimizer'
+        opt_filename = f'{filepath}/{filename}_optimizer.pkl'
         if pathlib.Path(opt_filename).is_file():
             with open(opt_filename, 'rb') as f: 
                 opt_config = pickle.load(f)
@@ -1097,7 +1097,7 @@ class NES_TP:
             print('Compiled the model with saved optimizer')
 
         # Loading training data if available
-        data_filename = filepath + f'/{filename}_train_data'
+        data_filename = f'{filepath}/{filename}_train_data.pkl'
         if pathlib.Path(data_filename).is_file():
             with open(data_filename, 'rb') as f: 
                 NES_TP_instance.x_train = pickle.load(f)
