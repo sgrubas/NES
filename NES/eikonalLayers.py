@@ -11,7 +11,7 @@ class IsoEikonal(Layer):
             If 'int' or 'float', the exponentiation is applied. By default P=2.
             hamiltonian : boolean : whether to use hamiltonian form of the equation 'H = P(v * |grad tau|) - P(1)'. By default is True
     """
-    def __init__(self, p=3, hamiltonian=True, **kwargs):
+    def __init__(self, p=2, hamiltonian=True, **kwargs):
         if kwargs.get('name') is None:
             kwargs['name'] = 'IsoEikonal'
         super(IsoEikonal, self).__init__(**kwargs)
