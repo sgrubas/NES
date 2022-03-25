@@ -114,7 +114,7 @@ class NES_OP:
             vmin, vmax = self.velocity.min, self.velocity.max
             T = L.Lambda(lambda z: (1 / vmin - 1 / vmax) * z + 1 / vmax, name='V_factor')(T)
         if factored:
-            D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='D_factor')(x)
+            D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='R_factor')(x)
             T = L.Multiply(name='Traveltime')([T, D])
 
         #### Final Traveltime Model
@@ -585,7 +585,7 @@ class NES_TP:
         #### Factorization
         if factored:
             xr_xs = L.Subtract(name='xr_xs_difference')([xr, xs])
-            D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='D_factor')(xr_xs)    
+            D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='R_factor')(xr_xs)    
             T = L.Multiply(name='Traveltime')([T, D])
 
         #### Final Traveltime Model
@@ -622,7 +622,7 @@ class NES_TP:
         Ls_list = []
         for i, dTi in enumerate(dTs_list):
             Ls_list += Diff(name=f'Ls{i}')([dTi, xs_list[i]])
-        Ls = L.Add(name='Laplacian_xs')(Lr_list)
+        Ls = L.Add(name='Laplacian_xs')(Ls_list)
         Lsm = Model(inputs=inputs, outputs=Ls)
 
         #### Full Hessian 'xr'
