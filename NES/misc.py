@@ -1,82 +1,11 @@
 import numpy as np
-from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import gaussian_filter
 import pkg_resources
-
+from .utils import Interpolator
 
 ######################################################
                 ### VELOCITY CLASSES ###
 ######################################################
-
-
-class Interpolator:
-    """
-        Interpolator using 'scipy.interpolate.RegularGridInterpolator'
-
-    """    
-    dim = None # used in NES
-    F = None 
-    dF = None
-    LF = None
-    axes = None
-    Func = None # used in NES
-    dFunc = None
-    LFunc = None
-    xmin = None # used in NES
-    xmax = None # used in NES
-    min = None # used in NES
-    max = None # used in NES
-
-    def __init__(self, F, *axes, **interp_kw):
-        """
-        The interpolator uses 'scipy.interpolate.RegularGridInterpolator'
-        
-        Arguments:
-            F: numpy array (nx,) or (nx,ny) or (nx,ny,nz)
-                Values 
-            axes: tuple of numpy arrays (nx,), (ny), (nz)
-                Grid
-            interp_kw: dictionary of keyword arguments for 'scipy.interpolate.RegularGridInterpolator'
-        """
-        self.dim = len(F.shape)
-        self.axes = axes
-        self.F = F
-        self.Func = RegularGridInterpolator(axes, F, **interp_kw)
-
-        self.xmin = [xi.min() for xi in axes]
-        self.xmax = [xi.max() for xi in axes]
-        self.min = F.min()
-        self.max = F.max()
-
-    def __call__(self, X):
-        """
-        Computes values of function using interpolation at points X
-        """
-        return self.Func(X)
-
-    def gradient(self, X, **interp_kw):
-        """
-        Computes partial derivatives (using default np.gradient) of function using interpolation at points X
-        """
-        if self.dFunc is None:
-            self.dF = np.stack(np.gradient(self.F, *self.axes), axis=-1)
-            self.dFunc = RegularGridInterpolator(self.axes, self.dF, **interp_kw)
-        return self.dFunc(X)
-
-    def laplacian(self, X, **interp_kw):
-        """
-        Computes laplacian (using default np.gradient) of function using interpolation at points X
-        """
-        if self.dFunc is None:
-            self.dF = np.stack(np.gradient(self.F, *self.axes), axis=-1)
-            self.dFunc = RegularGridInterpolator(self.axes, self.dF, **interp_kw)
-
-        if self.LFunc is None:
-            d2F = [np.gradient(self.dF[...,i], xi, axis=i) for i, xi in enumerate(self.axes)]
-            L = np.sum(np.stack(d2F, axis=-1), axis=-1)
-            self.LFunc = RegularGridInterpolator(self.axes, L, **interp_kw)
-
-        return self.LFunc(X)
 
 class VerticalGradient:
     """
@@ -146,6 +75,7 @@ class VerticalGradient:
         dt_dz = (2 * self.a**2 * Xdiff[...,-1] / down - 2 * self.a * Vxszs * up / down**2) * A
         return np.stack([dt_dx, dt_dz], axis=-1)
 
+
 class LocAnomaly:
     """
         Velocity class for model with gaussian anomaly
@@ -193,6 +123,7 @@ class LocAnomaly:
         """
         return (self.__call__(X) - self.vmin)[..., None] * (self.mus - X) / self.sigmas
 
+
 def Marmousi(smooth=None, section=None):
     """
         Creates Interpolator of Marmousi model
@@ -223,97 +154,9 @@ def Marmousi(smooth=None, section=None):
     Vel = Interpolator(V, x, z)
     return Vel
 
+
 def MarmousiSmoothedPart():
     """
         Return smoothed central part of Marmousi model 'NES.Marmousi(smooth=3, section=[[600, 900], None])' 
     """
     return Marmousi(smooth=3, section=[[600, 900], None])
-
-
-######################################################
-        ### GENERATION OF COLLOCATION POINTS ###
-######################################################
-
-class RegularGrid:
-    """
-        API for generating regular distribution in a given velocity model
-    """
-    limits = None 
-    def __init__(self, velocity):
-        """velocity: velocity class
-        """
-        self.xmins = velocity.xmin
-        self.xmaxs = velocity.xmax
-
-    def __call__(self, axes):
-        """ axes : tuple of ints : (nx, ny, nz)
-        """
-        xi = [np.linspace(self.xmins[i], self.xmaxs[i], axes[i]) for i in range(len(axes))]
-        X = np.meshgrid(*xi, indexing='ij')
-        X = np.stack(X, axis=-1)
-        return X
-
-    @staticmethod
-    def sou_rec_pairs(xs, xr):
-        xs, xr = np.array(xs, ndmin=2), np.array(xr, ndmin=2)
-        assert xr.shape[-1] == xs.shape[-1]
-        dim = xs.shape[-1]
-
-        Xs = np.expand_dims(xs, axis=tuple(i+len(xs.shape[:-1]) for i in range(len(xr.shape[:-1]))))
-        Xr = np.expand_dims(xr, axis=tuple(i for i in range(len(xs.shape[:-1]))))
-        Xs = np.tile(Xs, (1,)*len(xs.shape[:-1]) + tuple(j for j in xr.shape[:-1]) + (1,))
-        Xr = np.tile(Xr, tuple(j for j in xs.shape[:-1]) + (1,)*len(xr.shape[:-1]) + (1,))
-        return np.concatenate((Xs, Xr), axis=-1)
-
-
-class Uniform_PDF:
-    """
-        API for generating uniform distribution in a given velocity model
-    """
-    limits = None 
-    def __init__(self, velocity):
-        """velocity: velocity class
-        """
-        xmins = velocity.xmin
-        xmaxs = velocity.xmax
-        self.limits = np.array([xmins, xmaxs]).T
-
-    def __call__(self, num_points):
-        """ Return random points from uniform distribution in a given domain
-        """
-        return np.random.uniform(*self.limits.T, 
-            size=(num_points, len(self.limits)))
-
-
-class GradientBased_PDF:
-    """
-        API for generating gradient based distribution in a given velocity model
-    """
-    limits = None 
-    def __init__(self, velocity):
-        """velocity: velocity class
-        """
-        xmins = velocity.xmin
-        xmaxs = velocity.xmax
-        self.grad_func = velocity.gradient
-        self.limits = np.array([xmins, xmaxs]).T
-
-    def __call__(self, num_pts, regular=0.7, random_base=20000):
-        """ Return random points from uniform distribution in a given domain
-        """
-        reg_num = int(np.sqrt(num_pts * regular))
-        x_reg = [np.linspace(*limi, reg_num) for limi in self.limits]
-        x_reg = np.stack(np.meshgrid(*x_reg, indexing='ij'), axis=-1)
-        x_reg = x_reg.reshape(-1, x_reg.shape[-1])
-
-        rand_num = num_pts - reg_num**2
-        x_rand_base = np.random.uniform(*self.limits.T, size=(random_base, len(self.limits)))
-        dv = self.grad_func(x_rand_base)
-        dv = np.linalg.norm(dv, axis=-1)
-        dv += dv.mean()
-        dv /= dv.sum()
-        rand_ids = np.random.choice(random_base, rand_num, p=dv, replace=False)
-        x_rand = x_rand_base[rand_ids]
-
-        x = np.concatenate((x_reg, x_rand), axis=0)
-        return x

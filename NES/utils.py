@@ -1,10 +1,10 @@
 import tensorflow as tf
 import numpy as np
+from scipy.interpolate import RegularGridInterpolator
 import tensorflow.keras.layers as L
 from tensorflow.keras.models import Model
 from tensorflow.keras import initializers
 from tensorflow.python.platform import tf_logging as logging
-from .misc import Uniform_PDF
 from sklearn.cluster import KMeans
 from .experimental import ImportanceSampling, ImportanceWeighting, RARsampling, Generator
 
@@ -12,6 +12,7 @@ from .experimental import ImportanceSampling, ImportanceWeighting, RARsampling, 
 #######################################################################
                         ### ACTIVATIONS ###
 #######################################################################
+
 
 ACTS = {
         'tanh' : tf.math.tanh,
@@ -73,7 +74,7 @@ def Activation(act):
             act : str : It can be two types:
                         1) regular activation function - just name, 'tanh', 'relu', 'gauss', ...
                         2) adaptive activation - 'ad-name-n', where 'ad' means including trainable weight 'a',
-                           'n' is constan integer value describing the adaptivity degree. Format - act(x) = name(a * n * x).
+                           'n' is constant integer value describing the adaptivity degree. Format - act(x) = name(a * n * x).
                            Example: 'ad-gauss-1' (adaptive) or '-tanh-2' (not adaptive)
     """
     parts = act.split('-')
@@ -88,6 +89,7 @@ def Activation(act):
 #######################################################################
                             ### API LAYERS ###
 #######################################################################
+
 
 def DenseBody(inputs, nu, nl, out_dim=1, act='ad-gauss-1', out_act='ad-sigmoid-1', **kwargs):
     """
@@ -119,6 +121,7 @@ def DenseBody(inputs, nu, nl, out_dim=1, act='ad-gauss-1', out_act='ad-sigmoid-1
     out = L.Dense(out_dim, activation=Activation(out_act), **kwargs)(x)
     return out
 
+
 def Diff(**kwargs):
     """
         API function for differentiation using 'tf.gradients'
@@ -128,6 +131,7 @@ def Diff(**kwargs):
     """
     return L.Lambda(lambda x: tf.gradients(x[0], x[1], 
         unconnected_gradients='zero'), **kwargs)
+
 
 class SourceLoc(L.Layer):
     """
@@ -282,6 +286,7 @@ class NES_EarlyStopping(tf.keras.callbacks.Callback):
                             ### OTHER ###
 #######################################################################
 
+
 def data_handler(x, y, **kwargs):
     callbacks = kwargs.get('callbacks', [])
     generator_required = False
@@ -313,3 +318,123 @@ class Initializer(initializers.Initializer):
 
     def get_config(self):
         return {'x': self.x}
+
+class Interpolator:
+    """
+        Interpolator using 'scipy.interpolate.RegularGridInterpolator'
+
+    """    
+    dim = None # used in NES
+    F = None 
+    dF = None
+    LF = None
+    axes = None
+    Func = None # used in NES
+    dFunc = None
+    LFunc = None
+    xmin = None # used in NES
+    xmax = None # used in NES
+    min = None # used in NES
+    max = None # used in NES
+
+    def __init__(self, F, *axes, **interp_kw):
+        """
+        The interpolator uses 'scipy.interpolate.RegularGridInterpolator'
+        
+        Arguments:
+            F: numpy array (nx,) or (nx,ny) or (nx,ny,nz)
+                Values 
+            axes: tuple of numpy arrays (nx,), (ny), (nz)
+                Grid
+            interp_kw: dictionary of keyword arguments for 'scipy.interpolate.RegularGridInterpolator'
+        """
+        self.dim = len(F.shape)
+        self.axes = axes
+        self.F = F
+        self.Func = RegularGridInterpolator(axes, F, **interp_kw)
+
+        self.xmin = [xi.min() for xi in axes]
+        self.xmax = [xi.max() for xi in axes]
+        self.min = F.min()
+        self.max = F.max()
+
+    def __call__(self, X):
+        """
+        Computes values of function using interpolation at points X
+        """
+        return self.Func(X)
+
+    def gradient(self, X, **interp_kw):
+        """
+        Computes partial derivatives (using default np.gradient) of function using interpolation at points X
+        """
+        if self.dFunc is None:
+            self.dF = np.stack(np.gradient(self.F, *self.axes), axis=-1)
+            self.dFunc = RegularGridInterpolator(self.axes, self.dF, **interp_kw)
+        return self.dFunc(X)
+
+    def laplacian(self, X, **interp_kw):
+        """
+        Computes laplacian (using default np.gradient) of function using interpolation at points X
+        """
+        if self.dFunc is None:
+            self.dF = np.stack(np.gradient(self.F, *self.axes), axis=-1)
+            self.dFunc = RegularGridInterpolator(self.axes, self.dF, **interp_kw)
+
+        if self.LFunc is None:
+            d2F = [np.gradient(self.dF[...,i], xi, axis=i) for i, xi in enumerate(self.axes)]
+            L = np.sum(np.stack(d2F, axis=-1), axis=-1)
+            self.LFunc = RegularGridInterpolator(self.axes, L, **interp_kw)
+
+        return self.LFunc(X)
+
+
+class RegularGrid:
+    """
+        API for generating regular distribution in a given velocity model
+    """
+    limits = None 
+    def __init__(self, velocity):
+        """velocity: velocity class
+        """
+        self.xmins = velocity.xmin
+        self.xmaxs = velocity.xmax
+
+    def __call__(self, axes):
+        """ axes : tuple of ints : (nx, ny, nz)
+        """
+        xi = [np.linspace(self.xmins[i], self.xmaxs[i], axes[i]) for i in range(len(axes))]
+        X = np.meshgrid(*xi, indexing='ij')
+        X = np.stack(X, axis=-1)
+        return X
+
+    @staticmethod
+    def sou_rec_pairs(xs, xr):
+        xs, xr = np.array(xs, ndmin=2), np.array(xr, ndmin=2)
+        assert xr.shape[-1] == xs.shape[-1]
+        dim = xs.shape[-1]
+
+        Xs = np.expand_dims(xs, axis=tuple(i+len(xs.shape[:-1]) for i in range(len(xr.shape[:-1]))))
+        Xr = np.expand_dims(xr, axis=tuple(i for i in range(len(xs.shape[:-1]))))
+        Xs = np.tile(Xs, (1,)*len(xs.shape[:-1]) + tuple(j for j in xr.shape[:-1]) + (1,))
+        Xr = np.tile(Xr, tuple(j for j in xs.shape[:-1]) + (1,)*len(xr.shape[:-1]) + (1,))
+        return np.concatenate((Xs, Xr), axis=-1)
+
+
+class Uniform_PDF:
+    """
+        API for generating uniform distribution in a given velocity model
+    """
+    limits = None 
+    def __init__(self, velocity):
+        """velocity: velocity class
+        """
+        xmins = velocity.xmin
+        xmaxs = velocity.xmax
+        self.limits = np.array([xmins, xmaxs]).T
+
+    def __call__(self, num_points):
+        """ Return random points from uniform distribution in a given domain
+        """
+        return np.random.uniform(*self.limits.T, 
+            size=(num_points, len(self.limits)))

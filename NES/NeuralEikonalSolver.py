@@ -3,9 +3,8 @@ import numpy as np
 import tensorflow.keras.layers as L
 from tensorflow.keras.layers.experimental.preprocessing import Rescaling
 from tensorflow.keras.models import Model
-from .utils import DenseBody, Diff, SourceLoc, NES_EarlyStopping, data_handler, Activation
+from .utils import Interpolator, Uniform_PDF, RegularGrid, DenseBody, Diff, SourceLoc, NES_EarlyStopping, data_handler, Activation
 from .eikonalLayers import IsoEikonal
-from .misc import Interpolator, Uniform_PDF, RegularGrid
 import pickle, pathlib, shutil
 
 ###############################################################################

@@ -1,7 +1,6 @@
 import tensorflow as tf
 import numpy as np
 from tensorflow.python.platform import tf_logging as logging
-from .misc import Uniform_PDF
 from sklearn.cluster import KMeans
 
 #######################################################################
@@ -388,4 +387,43 @@ def check_singularities(x, NES):
             return True
     else:
         if np.any((x[..., :NES.dim] == x[..., NES.dim:]).prod(axis=-1)):
-            return True 
+            return True
+
+
+######################################################
+        ### GENERATION OF COLLOCATION POINTS ###
+######################################################
+
+
+class GradientBased_PDF:
+    """
+        API for generating gradient based distribution in a given velocity model
+    """
+    limits = None 
+    def __init__(self, velocity):
+        """velocity: velocity class
+        """
+        xmins = velocity.xmin
+        xmaxs = velocity.xmax
+        self.grad_func = velocity.gradient
+        self.limits = np.array([xmins, xmaxs]).T
+
+    def __call__(self, num_pts, regular=0.7, random_base=20000):
+        """ Return random points from uniform distribution in a given domain
+        """
+        reg_num = int(np.sqrt(num_pts * regular))
+        x_reg = [np.linspace(*limi, reg_num) for limi in self.limits]
+        x_reg = np.stack(np.meshgrid(*x_reg, indexing='ij'), axis=-1)
+        x_reg = x_reg.reshape(-1, x_reg.shape[-1])
+
+        rand_num = num_pts - reg_num**2
+        x_rand_base = np.random.uniform(*self.limits.T, size=(random_base, len(self.limits)))
+        dv = self.grad_func(x_rand_base)
+        dv = np.linalg.norm(dv, axis=-1)
+        dv += dv.mean()
+        dv /= dv.sum()
+        rand_ids = np.random.choice(random_base, rand_num, p=dv, replace=False)
+        x_rand = x_rand_base[rand_ids]
+
+        x = np.concatenate((x_reg, x_rand), axis=0)
+        return x
