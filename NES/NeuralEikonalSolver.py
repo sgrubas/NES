@@ -49,6 +49,7 @@ class NES_OP:
             assert isinstance(eikonal, L.Layer), "Eikonal should be an instance of keras Layer"   
             self.equation = eikonal
 
+        self.sing_eps = 1e-5    # tolerance for source singularity (to remove from training)
         self.x_train = None     # input training data
         self.y_train = None     # output training data
         self.compiled = False   # compilation status
@@ -255,7 +256,7 @@ class NES_OP:
                 xr : numpy array (N, dim) of floats : Array of receivers. 'N' - number of receivers, 'dim' - dimension
         """
 
-        ids = abs(xr - self.xs[None, ...]).sum(axis=-1) != 0 # removing singular point
+        ids = abs(xr - self.xs[None, ...]).sum(axis=-1) > self.sing_eps # removing singular point
         self.x_train = self._prepare_inputs(self.model, xr[ids], self.velocity)
 
     def train_outputs(self,):
@@ -496,6 +497,7 @@ class NES_TP:
             assert isinstance(eikonal, L.Layer), "Eikonal should be an instance of keras Layer"   
             self.equation = eikonal
 
+        self.sing_eps = 1e-5    # tolerance for source singularity (to remove from training)
         self.x_train = None     # input training data
         self.y_train = None     # output training data
         self.compiled = False   # compilation status
@@ -919,8 +921,7 @@ class NES_TP:
         xs = x[..., :self.dim]
         xr = x[..., self.dim:]
 
-        ids = abs(xr - xs).sum(axis=-1) != 0 # removing singular points
-
+        ids = abs(xr - xs).sum(axis=-1) > self.sing_eps # removing singular points
         self.x_train = self._prepare_inputs(self.model, x[ids], self.velocity)
 
     def train_outputs(self,):
