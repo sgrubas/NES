@@ -6,7 +6,7 @@ from tensorflow.keras.models import Model
 from tensorflow.keras import initializers
 from tensorflow.python.platform import tf_logging as logging
 from sklearn.cluster import KMeans
-from .experimental import ImportanceSampling, ImportanceWeighting, RARsampling, Generator
+from .experimental import ImportanceSampling, ImportanceWeighting, RARsampling, Generator, FromCoarseToFineResampling
 
 
 #######################################################################
@@ -291,7 +291,8 @@ def data_handler(x, y, **kwargs):
     callbacks = kwargs.get('callbacks', [])
     generator_required = False
     for c in callbacks:
-        if isinstance(c, (ImportanceSampling, ImportanceWeighting, RARsampling)):
+        if isinstance(c, (ImportanceSampling, ImportanceWeighting, 
+                          RARsampling, FromCoarseToFineResampling)):
             generator_required = True
             break
 
