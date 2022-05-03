@@ -353,6 +353,9 @@ class NES_OP:
             Saves the current NES_OP model to `filepath` directory.
             `save_optimizer` saves the optimizer state to continue the training from the last point,
             `training_data` saves the last training set used for training.
+
+            NES_OP includes: the neural-network weights ('filepath_weights'), 
+                             the velocity model and configures ('filepath_config')
         """
 
         config = self.config
@@ -1020,6 +1023,9 @@ class NES_TP:
             Saves the current NES_OP model to `filepath` directory.
             `save_optimizer` saves the optimizer state to continue the training from the last point,
             `training_data` saves the last training set used for training.
+
+            NES_TP includes: the neural-network weights ('filepath_weights'), 
+                             the velocity model and configures ('filepath_config')
         """
         config = self.config
         config['velocity'] = self.velocity
