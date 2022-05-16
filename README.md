@@ -20,7 +20,7 @@ For comparison with existing neural-network solutions see [EikoNet](https://gith
 
 ## Installation
 ```python
-!pip install git+https://github.com/sgrubas/NES.git
+pip install git+https://github.com/sgrubas/NES.git
 ```
 
 # Quick example
