@@ -44,7 +44,7 @@ If you find NES useful for your research, please cite:
 @article{grubas2022nes,
   title={Neural Eikonal Solver: improving accuracy of physics-informed neural networks for solving eikonal equation in case of caustics},
   author={Grubas, Serafim I and Loginov, Georgy N and Duchkov, Anton A},
-  journal={arXiv preprint},
+  journal={######},
   year={2022},
 }
 ```
