@@ -1,5 +1,5 @@
 # Neural Eikonal Solver
-**Neural Eikonal Solver (NES)** is framework for solving factored eikonal equation using physics-informed neural network, for details see our [paper](https://github.com/sgrubas/NES).
+**Neural Eikonal Solver (NES)** is framework for solving factored eikonal equation using physics-informed neural network, for details see our [paper](https://arxiv.org/abs/2205.07989).
 
 ## Tutorials
 See quick introduction on [Google Colab](https://colab.research.google.com/github/sgrubas/NES/blob/main/notebooks/NES_Introduction.ipynb)
@@ -41,11 +41,14 @@ T = Eik.Traveltime(X)
 # Citation
 If you find NES useful for your research, please cite:
 ```
-@article{grubas2022nes,
-  title={Neural Eikonal Solver: improving accuracy of physics-informed neural networks for solving eikonal equation in case of caustics},
-  author={Grubas, Serafim I and Loginov, Georgy N and Duchkov, Anton A},
-  journal={######},
-  year={2022},
+@misc{grubas2022NES,
+  title = {Neural Eikonal Solver: improving accuracy of physics-informed neural networks for solving eikonal equation in case of caustics},
+  doi = {10.48550/ARXIV.2205.07989}, 
+  url = {https://arxiv.org/abs/2205.07989},
+  author = {Grubas, Serafim and Duchkov, Anton and Loginov, Georgy},
+  publisher = {arXiv},
+  year = {2022},
+  copyright = {Creative Commons Attribution 4.0 International}
 }
 ```
 
