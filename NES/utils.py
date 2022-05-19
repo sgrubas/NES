@@ -77,14 +77,21 @@ def Activation(act):
                            'n' is constant integer value describing the adaptivity degree. Format - act(x) = name(a * n * x).
                            Example: 'ad-gauss-1' (adaptive) or '-tanh-2' (not adaptive)
     """
-    parts = act.split('-')
-    if (len(parts) == 1):
-        if act in ACTS.keys():
-            return ACTS[act]
+
+    if callable(act): 
+        return act
+
+    elif isinstance(act, str): 
+        parts = act.split('-')
+        if (len(parts) == 1):
+            if act in ACTS.keys():
+                return ACTS[act]
+            else:
+                return act
         else:
-            return act
+            return AdaptiveActivation(act)
     else:
-        return AdaptiveActivation(act)
+        raise ValueError("'act' must be either 'str' or 'callable'")
 
 #######################################################################
                             ### API LAYERS ###
