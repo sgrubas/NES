@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 NAME            = "NES"
-VERSION         = "0.1.0"
+VERSION         = "0.2.0"
 DESCRIPTION     = "Neural Eikonal Solver: Framework for solving the eikonal equation using neural networks"
 URL             = "https://github.com/sgrubas/NES"
 LICENSE         = "MIT"
