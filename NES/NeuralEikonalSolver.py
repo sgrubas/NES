@@ -3,7 +3,7 @@ import numpy as np
 import tensorflow.keras.layers as L
 from tensorflow.keras.layers.experimental.preprocessing import Rescaling
 from tensorflow.keras.models import Model
-from .utils import Interpolator, Uniform_PDF, RegularGrid, DenseBody, Diff, SourceLoc, NES_EarlyStopping, data_handler, Activation
+from .utils import Uniform_PDF, RegularGrid, DenseBody, Diff, SourceLoc, NES_EarlyStopping, data_handler, Activation
 from .eikonalLayers import IsoEikonal
 import pickle, pathlib, shutil
 
@@ -32,7 +32,7 @@ class NES_OP:
             self.xs = np.array(xs).squeeze()
             self.dim = len(xs)
         else: 
-            assert False, "Unrecognized 'xs' type"
+            raise ValueError("Unrecognized 'xs' type")
         
         # Velocity
         assert callable(velocity), "Must be callable in a format 'v(xr) = velocity(xr)'"
@@ -78,9 +78,10 @@ class NES_OP:
 
         """
         #### The best initializer
-        if kwargs.get('kernel_initializer') is None:
-            kwargs['kernel_initializer'] = 'he_normal'
+        kwargs.setdefault('kernel_initializer', 'he_normal')
 
+        losses = kwargs.pop('losses', None)
+        
         # Saving configuration for reproducibility, to save and load model
         self.config['nl'] = nl
         self.config['nu'] = nu
@@ -89,11 +90,13 @@ class NES_OP:
         self.config['input_scale'] = input_scale
         self.config['factored'] = factored
         self.config['out_vscale'] = out_vscale
+        self.config['losses'] = losses
         for kw, v in kwargs.items():
             self.config[kw] = v
 
         #### Receiver coordinate input
         xr_list = [L.Input(shape=(1,), name=f'xr{i}') for i in range(self.dim)]
+        self.xr_list = xr_list
 
         #### Source coordinate reduction
         xr = L.Concatenate(name='xr', axis=-1)(xr_list)
@@ -118,44 +121,44 @@ class NES_OP:
             T = L.Multiply(name='Traveltime')([T, D])
 
         #### Final Traveltime Model
-        Tm = Model(inputs=xr_list, outputs=T)
+        Tm = Model(inputs=xr_list, outputs=T, name=f"Model_{T.name.split('/')[0]}")
 
         #### Gradient
         dT_list = Diff(name='gradients')([T, xr_list])
+        self._dT_list = dT_list
         dT = L.Concatenate(name='Gradient', axis=-1)(dT_list)
-        Gm = Model(inputs=xr_list, outputs=dT)
+        Gm = Model(inputs=xr_list, outputs=dT, name=f"Model_{dT.name.split('/')[0]}")
 
         #### Eikonal equation
         v = L.Input(shape=(1,), name='v') # Velocity input
         Eq = self.equation(dT_list, v)
-        Em = Model(inputs=xr_list + [v], outputs=Eq)
+        Em = Model(inputs=xr_list + [v], outputs=Eq, name=f"Model_{Eq.name.split('/')[0]}")
 
-        #### Velocity
-        V = L.Lambda(lambda z: 1 / tf.norm(z, axis=-1, keepdims=True), name='Velocity')(dT)
-        Vm = Model(inputs=xr_list, outputs=V)
-
-        #### Laplacian
-        L_list = []
-        for i, dTi in enumerate(dT_list):
-            L_list += Diff(name=f'L{i}')([dTi, xr_list[i]])
-        LT = L.Add(name='Laplacian')(L_list)
-        Lm = Model(inputs=xr_list, outputs=LT)
-
-        #### Full Hessian
-        H_list = []
-        for i, dTri in enumerate(dT_list):
-            H_list += Diff(name=f'd2T{i}')([dTri, xr_list[i:]])
-        H = L.Concatenate(axis=-1, name='Hessians')(H_list)
-        Hm = Model(inputs=xr_list, outputs=H)
+        # #### Full Hessian
+        # H_list = []
+        # for i, dTri in enumerate(dT_list):
+        #     H_list += Diff(name=f'd2T{i}')([dTri, xr_list[i:]])
+        # H = L.Concatenate(axis=-1, name='Hessians')(H_list)
+        # Hm = Model(inputs=xr_list, outputs=H, name=f"Model_{H.name.split('/')[0]}")
 
         # All callable models
-        self.outs = dict(T=Tm, E=Em, G=Gm, V=Vm, L=Lm, H=Hm)
+        self.outs = dict(T=Tm, E=Em, G=Gm)
+        # self.outs = dict(H=Hm)
 
-        
         # Trainable model
+        kw_models = dict(T=T, E=Eq)
+        if losses is None: losses = ['E']
         inputs = xr_list + [v]
-        outputs = Eq
-        self.model = Model(inputs=inputs, outputs=outputs)
+        model_outputs = [kw_models[kw] for kw in losses]
+        model_name = ''
+        for si in [out.name.split('/')[0] for out in model_outputs]: model_name += '_' + si 
+        self.model = Model(inputs=inputs, outputs=model_outputs, name=f"Model{model_name}")
+
+    def __call__(self, x, **kwargs):
+        """
+            Calls the model for training (see tf.keras.models.Model.__call__)
+        """
+        return self.model(x, **kwargs)
 
     def Traveltime(self, xr, **kwargs):
         """
@@ -194,7 +197,8 @@ class NES_OP:
             Returns:
                 V : numpy array (N,) of floats : Predicted velocity from the source 'NES_OP.xs' at 'xr'
         """
-        return self._predict(xr, 'V', **kwargs)
+        G = self.Gradient(x=x, **kwargs)
+        return 1 / np.linalg.norm(G, axis=-1)
 
     def Laplacian(self, xr, **kwargs):
         """
@@ -206,8 +210,17 @@ class NES_OP:
 
             Returns:
                 Laplacian : numpy array (N,) of floats : Laplacian from the source 'NES_OP.xs' at 'xr'
-        """        
-        return self._predict(xr, 'L', **kwargs)
+        """
+        kw = 'L'
+        if self.outs.get(kw) is None: 
+            L_list = []
+            for i, dTi in enumerate(self._dT_list):
+                L_list += Diff(name=f'L{i}')([dTi, self.xr_list[i]])
+            LT = L.Add(name='Laplacian')(L_list)
+            self.outs[kw] = Model(inputs=self.xr_list, outputs=LT, 
+                                   name=f"Model_{LT.name.split('/')[0]}")
+
+        return self._predict(xr, kw, **kwargs)
 
 
     def Hessian(self, xr, **kwargs):
@@ -223,8 +236,16 @@ class NES_OP:
 
             Returns:
                 Hessian : numpy array (N, dim*((dim - 1)/2 + 1) ) of floats : Laplacian from the source 'NES_OP.xs' at 'xr'
-        """        
-        return self._predict(xr, 'H', **kwargs)
+        """
+        kw = 'H'
+        if self.outs.get(kw) is None: 
+            H_list = []
+            for i, dTri in enumerate(self._dT_list):
+                H_list += Diff(name=f'd2T{i}')([dTri, self.xr_list[i:]])
+            H = L.Concatenate(axis=-1, name='Hessians')(H_list)
+            self.outs[kw] = Model(inputs=xr_list, outputs=H, name=f"Model_{H.name.split('/')[0]}")
+
+        return self._predict(xr, kw, **kwargs)
 
     @staticmethod
     def _prepare_inputs(model, x, velocity):
@@ -242,8 +263,7 @@ class NES_OP:
         return X
 
     def _predict(self, xr, out, **kwargs):
-        if kwargs.get('batch_size') is None:
-            kwargs['batch_size'] = 100000
+        kwargs.setdefault('batch_size', 100000)
         X = self._prepare_inputs(self.outs[out], xr, self.velocity)
         P = self.outs[out].predict(X, **kwargs).reshape(*xr.shape[:-1], -1).squeeze()
         return P
@@ -487,7 +507,7 @@ class NES_TP:
         # Velocity
         assert callable(velocity), "Must be callable in a format 'v(xr) = velocity(xr)'"
         self.velocity = velocity
-        self.dim = len(self.velocity.xmin)
+        self.dim = self.velocity.dim
 
         # Input scale factor
         self.xscale = np.max(np.abs([self.velocity.xmin, 
@@ -530,8 +550,7 @@ class NES_TP:
 
         """
         #### The best initializer
-        if kwargs.get('kernel_initializer') is None:
-            kwargs['kernel_initializer'] = 'he_normal'
+        kwargs.setdefault('kernel_initializer', 'he_normal')
 
         # outputs for training losses. Since this is Two-Point formulation, 
         # we can solve two eikonal equations according to the reciprocity principle.
@@ -553,10 +572,12 @@ class NES_TP:
 
         #### Input for Source part
         xs_list = [L.Input(shape=(1,), name='xs' + str(i)) for i in range(self.dim)]
+        self.xs_list = xs_list
         xs = L.Concatenate(name='xs', axis=-1)(xs_list)
 
         #### Input for Receiver part
         xr_list = [L.Input(shape=(1,), name='xr' + str(i)) for i in range(self.dim)]
+        self.xr_list = xr_list
         xr = L.Concatenate(name='xr', axis=-1)(xr_list)
         
         #### Input list
@@ -574,13 +595,13 @@ class NES_TP:
 
         #### Reciprocity 
         if reciprocity: # T(xs,xr)=T(xr,xs)
-            t = Model(inputs=inputs, outputs=T)
+            t = Model(inputs=inputs, outputs=T, name='Model_No_Reciprocity')
             xsr = xs_list + xr_list; xrs = xr_list + xs_list;
             tsr = t(xsr); trs = t(xrs)
             T = L.Lambda(lambda x: 0.5*(x[0] + x[1]), name='Reciprocity')([tsr, trs])
 
         #### Output activation
-        T = L.Dense(1, activation=Activation(out_act), **kwargs)(T)
+        T = L.Activation(Activation(out_act))(T)
         # Scaling to the range of [1/vmax , 1/vmin]. T is assumed to be in [0, 1]
         if out_vscale:
             vmin, vmax = self.velocity.min, self.velocity.max
@@ -593,74 +614,47 @@ class NES_TP:
             T = L.Multiply(name='Traveltime')([T, D])
 
         #### Final Traveltime Model
-        Tm = Model(inputs=inputs, outputs=T)
+        Tm = Model(inputs=inputs, outputs=T, name=f"Model_{T.name.split('/')[0]}")
 
         #### Gradient 'xr'
         dTr_list = Diff(name='gradients_xr')([T, xr_list])
+        self._dTr_list = dTr_list
         dTr = L.Concatenate(axis=-1, name='Gradient_xr')(dTr_list)
-        Gr = Model(inputs=inputs, outputs=dTr)
+        Gr = Model(inputs=inputs, outputs=dTr, name=f"Model_{dTr.name.split('/')[0]}")
 
         #### Eikonal 'xr'
         vr = L.Input(shape=(1,), name='vr') # velocity input for 'xr'
         Er = self.equation(dTr_list, vr)
-        Emr = Model(inputs=inputs + [vr], outputs=Er)
+        Emr = Model(inputs=inputs + [vr], outputs=Er, name=f"Model_{Er.name.split('/')[0]}")
 
         #### Gradient 'xs'
         dTs_list = Diff(name='gradients_xs')([T, xs_list])
+        self._dTs_list = dTs_list
         dTs = L.Concatenate(axis=-1, name='Gradient_xs')(dTs_list)
-        Gs = Model(inputs=inputs, outputs=dTs)
+        Gs = Model(inputs=inputs, outputs=dTs, name=f"Model_{dTs.name.split('/')[0]}")
 
         #### Eikonal 'xs'
         vs = L.Input(shape=(1,), name='vs') # velocity input for 'xs'
         Es = self.equation(dTs_list, vs)
-        Ems = Model(inputs=inputs + [vs], outputs=Es)
-
-        #### Laplacian 'xr'
-        Lr_list = []
-        for i, dTi in enumerate(dTr_list):
-            Lr_list += Diff(name=f'Lr{i}')([dTi, xr_list[i]])
-        Lr = L.Add(name='Laplacian_xr')(Lr_list)
-        Lrm = Model(inputs=inputs, outputs=Lr)
-
-        #### Laplacian 'xs'
-        Ls_list = []
-        for i, dTi in enumerate(dTs_list):
-            Ls_list += Diff(name=f'Ls{i}')([dTi, xs_list[i]])
-        Ls = L.Add(name='Laplacian_xs')(Ls_list)
-        Lsm = Model(inputs=inputs, outputs=Ls)
-
-        #### Full Hessian 'xr'
-        Hr_list = []
-        for i, dTri in enumerate(dTr_list):
-            Hr_list += Diff(name=f'Hr{i}')([dTri, xr_list[i:]])
-        Hr = L.Concatenate(axis=-1, name='Hessian_xr')(Hr_list)
-        Hrm = Model(inputs=inputs, outputs=Hr)
-
-        #### Full Hessian 'xr'
-        Hs_list = []
-        for i, dTsi in enumerate(dTs_list):
-            Hs_list += Diff(name=f'Hs{i}')([dTsi, xs_list[i:]])
-        Hs = L.Concatenate(axis=-1, name='Hessian_xs')(Hs_list)
-        Hsm = Model(inputs=inputs, outputs=Hs)
-
-        #### Mixed Hessian 'xs', 'xr'
-        Hsr_list = []
-        for i, dTsi in enumerate(dTs_list):
-            Hsr_list += Diff(name=f'Hsr{i}')([dTsi, xr_list])
-        Hsr = L.Concatenate(axis=-1, name='hessian_xsxr')(Hsr_list)
-        Hsr = L.Reshape((self.dim, self.dim), name='Hessian_xsxr')(Hsr)
-        Hsrm = Model(inputs=inputs, outputs=Hsr)
+        Ems = Model(inputs=inputs + [vs], outputs=Es, name=f"Model_{Es.name.split('/')[0]}")
 
         #### Trainable model ####
-        kw_models = dict(Er=Er, Es=Es)
+        kw_models = dict(T=T, Er=Er, Es=Es)
         if losses is None: losses = ['Er']
         model_outputs = [kw_models[kw] for kw in losses]
         model_inputs = inputs + [vr] * ('Er' in losses) + [vs] * ('Es' in losses)
-        self.model = Model(inputs=model_inputs, outputs=model_outputs)
+        model_name = ''
+        for si in [out.name.split('/')[0] for out in model_outputs]: model_name += '_' + si 
+        self.model = Model(inputs=model_inputs, outputs=model_outputs, name=f"Model{model_name}")
 
         #### All callable models ####
-        self.outs = dict(T=Tm, Er=Emr, Es=Ems, Gr=Gr, Gs=Gs, 
-                         Lr=Lrm, Ls=Lsm, Hr=Hrm, Hs=Hsm, Hsr=Hsrm)
+        self.outs = dict(T=Tm, Er=Emr, Es=Ems, Gr=Gr, Gs=Gs)
+
+    def __call__(self, x, **kwargs):
+        """
+            Calls the model for training (see tf.keras.models.Model.__call__)
+        """
+        return self.model(x, **kwargs)
 
     def Traveltime(self, x, **kwargs):
         """
@@ -700,7 +694,7 @@ class NES_TP:
                 dTs : numpy array (N, dim) of floats : gradient of traveltimes w.r.t. 'xs'
         """
         return self._predict(x, 'Gs', **kwargs)
-        
+
     def VelocityR(self, x, **kwargs):
         """
             Predicted velocity at 'xr'.
@@ -739,8 +733,17 @@ class NES_TP:
 
             Returns:
                 Laplacian : numpy array (N,) of floats
-        """        
-        return self._predict(x, 'Lr', **kwargs)
+        """
+        kw = 'Lr'
+        if self.outs.get(kw) is None: # create model for the first call
+            Lr_list = []
+            for i, dTi in enumerate(self._dTr_list):
+                Lr_list += Diff(name=f'Lr{i}')([dTi, self.xr_list[i]])
+            Lr = L.Add(name='Laplacian_xr')(Lr_list)
+            inputs = self.xs_list + self.xr_list
+            self.outs[kw] = Model(inputs=inputs, outputs=Lr, name=f"Model_{Lr.name.split('/')[0]}")
+
+        return self._predict(x, kw, **kwargs)
 
     def LaplacianS(self, x, **kwargs):
         """
@@ -752,8 +755,17 @@ class NES_TP:
 
             Returns:
                 Laplacian : numpy array (N,) of floats
-        """        
-        return self._predict(x, 'Ls', **kwargs)
+        """
+        kw = 'Ls'
+        if self.outs.get(kw) is None: # create model for the first call
+            Ls_list = []
+            for i, dTi in enumerate(self._dTs_list):
+                Ls_list += Diff(name=f'Ls{i}')([dTi, self.xs_list[i]])
+            Ls = L.Add(name='Laplacian_xs')(Ls_list)
+            inputs = self.xs_list + self.xr_list
+            self.outs[kw] = Model(inputs=inputs, outputs=Ls, name=f"Model_{Ls.name.split('/')[0]}")
+
+        return self._predict(x, kw, **kwargs)
 
     def HessianR(self, x, **kwargs):
         """
@@ -768,8 +780,17 @@ class NES_TP:
 
             Returns:
                 Hessian : numpy array (N, dim*((dim - 1)/2 + 1) ) of floats
-        """        
-        return self._predict(x, 'Hr', **kwargs)
+        """
+        kw = 'Hr'
+        if self.outs.get(kw) is None: # create model for the first call
+            Hr_list = []
+            for i, dTri in enumerate(self._dTr_list):
+                Hr_list += Diff(name=f'Hr{i}')([dTri, self.xr_list[i:]])
+            Hr = L.Concatenate(axis=-1, name='Hessian_xr')(Hr_list)
+            inputs = self.xs_list + self.xr_list
+            self.outs[kw] = Model(inputs=inputs, outputs=Hr, name=f"Model_{Hr.name.split('/')[0]}")
+
+        return self._predict(x, kw, **kwargs)
 
     def HessianS(self, x, **kwargs):
         """
@@ -784,8 +805,17 @@ class NES_TP:
 
             Returns:
                 Hessian : numpy array (N, dim*((dim - 1)/2 + 1) ) of floats
-        """        
-        return self._predict(x, 'Hs', **kwargs)
+        """
+        kw = 'Hs'
+        if self.outs.get(kw) is None: # create model for the first call
+            Hs_list = []
+            for i, dTsi in enumerate(self._dTs_list):
+                Hs_list += Diff(name=f'Hs{i}')([dTsi, self.xs_list[i:]])
+            Hs = L.Concatenate(axis=-1, name='Hessian_xs')(Hs_list)
+            inputs = self.xs_list + self.xr_list
+            self.outs[kw] = Model(inputs=inputs, outputs=Hs, name=f"Model_{Hs.name.split('/')[0]}")
+
+        return self._predict(x, kw, **kwargs)
 
     def HessianSR(self, x, **kwargs):
         """
@@ -803,8 +833,18 @@ class NES_TP:
 
             Returns:
                 HessianSR : numpy array (N, dim, dim) of floats
-        """        
-        return self._predict(x, 'Hsr', **kwargs)
+        """
+        kw = 'Hsr'
+        if self.outs.get(kw) is None: # create model for the first call
+            Hsr_list = []
+            for i, dTsi in enumerate(self._dTs_list):
+                Hsr_list += Diff(name=f'Hsr{i}')([dTsi, self.xr_list])
+            Hsr = L.Concatenate(axis=-1, name='hessian_xsxr')(Hsr_list)
+            Hsr = L.Reshape((self.dim, self.dim), name='Hessian_xsxr')(Hsr)
+            inputs = self.xs_list + self.xr_list
+            self.outs[kw] = Model(inputs=inputs, outputs=Hsr, name=f"Model_{Hsr.name.split('/')[0]}")
+
+        return self._predict(x, kw, **kwargs)
 
     def Multisource(self, Xs, Xr, **kwargs):
         """
@@ -906,8 +946,7 @@ class NES_TP:
         return X
 
     def _predict(self, x, out, **kwargs):
-        if kwargs.get('batch_size') is None:
-            kwargs['batch_size'] = 100000
+        kwargs.setdefault('batch_size', 100000)
         X = self._prepare_inputs(self.outs[out], x, self.velocity)
         P = self.outs[out].predict(X, **kwargs)
         shape = x.shape[:-1] + P.shape[1:]
@@ -972,8 +1011,7 @@ class NES_TP:
         """
         if isinstance(x_train, int):
             pdf = Uniform_PDF(self.velocity)
-            xs_train, xr_train = pdf(x_train), pdf(x_train)
-            x_train = np.concatenate((xs_train, xr_train), axis=-1)
+            x_train = pdf(x_train, rep=2)
 
         self.train_inputs(x_train)
         self.train_outputs()
