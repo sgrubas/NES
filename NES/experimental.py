@@ -431,64 +431,6 @@ class FromCoarseToFineResampling(tf.keras.callbacks.Callback):
         x_eval = self.NES._prepare_inputs(self.model, x, self.NES.velocity)
         return x_eval
 
-
-# class NES_EarlyStopping(tf.keras.callbacks.Callback):
-#     def __init__(self,
-#                monitor='loss',
-#                tolerance=0,
-#                patience=10,
-#                verbose=1,
-#                conversion=lambda x: x * 10**(-0.16),
-#                ):
-#         super(NES_EarlyStopping, self).__init__()
-#         assert monitor == 'loss' or monitor == 'val_loss', \
-#         "Only 'loss' and 'val_loss' are supported for monitor metric"
-
-#         self.monitor = monitor
-#         self.tolerance = tolerance
-#         self.patience = patience
-#         self.verbose = verbose
-#         self.conversion = conversion
-
-#         self.wait = 0
-#         self.stopped_epoch = 0
-
-#     def on_train_begin(self, logs=None):
-#         # Allow instances to be re-used
-#         self.wait = 0
-#         self.stopped_epoch = 0
-
-#     def on_epoch_end(self, epoch, logs=None):
-#         current = self.get_monitor_value(logs)
-#         if current is None:
-#             return
-
-#         if np.less(self.conversion(current), self.tolerance):
-#             self.wait += 1
-
-#         # Only check after the first epoch.
-#         if self.wait >= self.patience and epoch > 0:
-#             self.monitor_last = current
-#             self.tolerance_last = self.conversion(current)
-#             self.stopped_epoch = epoch
-#             self.model.stop_training = True
-
-#     def on_train_end(self, logs=None):
-#         if self.stopped_epoch > 0 and self.verbose > 0:
-#             print('Epoch %05d: early stopping' % (self.stopped_epoch + 1))
-#             print(f'{self.monitor}: {self.monitor_last:.5f}')
-#             print(f'Approximate RMAE of solution: {100*self.tolerance_last:.5f} %')
-
-#     def get_monitor_value(self, logs):
-#         logs = logs or {}
-#         monitor_value = logs.get(self.monitor)
-#         if monitor_value is None:
-#           logging.warning('Early stopping conditioned on metric `%s` '
-#                           'which is not available. Available metrics are: %s',
-#                           self.monitor, ','.join(list(logs.keys())))
-#         return monitor_value
-
-
 def TP_solver(NES):
     if getattr(NES, 'xs', False):
         return False
@@ -541,21 +483,4 @@ class GradientBased_PDF:
 
         x = np.concatenate((x_reg, x_rand), axis=0)
         return x
-
-# class Uniform_PDF:
-#     """
-#         API for generating uniform distribution in a given velocity model
-#     """
-#     limits = None 
-#     def __init__(self, velocity):
-#         """velocity: velocity class
-#         """
-#         xmins = velocity.xmin
-#         xmaxs = velocity.xmax
-#         self.limits = np.array([xmins, xmaxs]).T
-
-#     def __call__(self, num_points):
-#         """ Return random points from uniform distribution in a given domain
-#         """
-#         return np.random.uniform(*self.limits.T, 
-#             size=(num_points, len(self.limits)))
+        
