@@ -98,7 +98,7 @@ def Activation(act):
 #######################################################################
 
 
-def DenseBody(inputs, nu, nl, out_dim=1, act='ad-gauss-1', out_act='ad-sigmoid-1', **kwargs):
+def DenseBody(inputs, nu, nl, out_dim=1, act='ad-gauss-1', out_act='linear', **kwargs):
     """
         API function that construct the block of fully connected layers.
 
@@ -114,12 +114,12 @@ def DenseBody(inputs, nu, nl, out_dim=1, act='ad-gauss-1', out_act='ad-sigmoid-1
         Returns:
             output : tf.Tensor : the output of fully-connected block
     """
-    if kwargs.get('kernel_initializer') is None:
-        kwargs['kernel_initializer'] = 'he_normal'
-
+    kwargs.setdefault('kernel_initializer', 'he_normal')
+    
     if isinstance(nu, int):
         nu = [nu]*nl
-    assert isinstance(nu, (list, np.ndarray)) and len(nu) == nl, "Number hidden layers 'nl' must be equal to 'len(nu)'"
+    assert isinstance(nu, (list, tuple, np.ndarray)) and len(nu) == nl, \
+    "Number hidden layers 'nl' must be equal to 'len(nu)'"
 
     x = L.Dense(nu[0], activation=Activation(act), **kwargs)(inputs)
     for i in range(1, nl):
@@ -136,8 +136,7 @@ def Diff(**kwargs):
         Arguments:
             kwargs : keyword arguments : Arguments for 'tf.keras.layers.Lambda(**kwargs)' such as 'name'
     """
-    return L.Lambda(lambda x: tf.gradients(x[0], x[1], 
-        unconnected_gradients='zero'), **kwargs)
+    return L.Lambda(lambda x: tf.gradients(x[0], x[1], unconnected_gradients='zero'), **kwargs)
 
 
 class SourceLoc(L.Layer):
@@ -431,18 +430,26 @@ class RegularGrid:
 
 class Uniform_PDF:
     """
-        API for generating uniform distribution in a given velocity model
+        API for generating uniform distribution in a domain limits
     """
     limits = None 
-    def __init__(self, velocity):
-        """velocity: velocity class
+    def __init__(self, *args):
         """
-        xmins = velocity.xmin
-        xmaxs = velocity.xmax
-        self.limits = np.array([xmins, xmaxs]).T
+            args: 
+                - instance of NES.utils.Interpolator
+                - (xmin, xmax) 
+        """
+        if len(args) == 1:
+            xmins, xmaxs = getattr(args[0], 'xmin'), getattr(args[0], 'xmax')
+        elif len(args) == 2:
+            assert len(args[0]) == len(args[1])
+            xmins, xmaxs = args
+        self.limits = np.array([xmins, xmaxs])
 
-    def __call__(self, num_points):
+    def __call__(self, num_points, rep=1):
         """ Return random points from uniform distribution in a given domain
         """
-        return np.random.uniform(*self.limits.T, 
-            size=(num_points, len(self.limits)))
+        dim = self.limits.shape[1] * rep
+        lim0 = list(self.limits[0]) * rep
+        lim1 = list(self.limits[1]) * rep
+        return np.random.uniform(lim0, lim1, size=(num_points, dim))
