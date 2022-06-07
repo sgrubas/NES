@@ -12,8 +12,7 @@ class IsoEikonal(Layer):
             hamiltonian : boolean : whether to use hamiltonian form of the equation 'H = P(v * |grad tau|) - P(1)'. By default is True
     """
     def __init__(self, p=2, hamiltonian=True, **kwargs):
-        if kwargs.get('name') is None:
-            kwargs['name'] = 'IsoEikonal'
+        kwargs.setdefault('name', 'IsoEikonal')
         super(IsoEikonal, self).__init__(**kwargs)
         self.hamiltonian = hamiltonian
 
