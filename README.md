@@ -1,5 +1,5 @@
 # Neural Eikonal Solver
-**Neural Eikonal Solver (NES)** is framework for solving factored eikonal equation using physics-informed neural network, for details see our [paper](https://arxiv.org/abs/2205.07989).
+[**Neural Eikonal Solver (NES)**](https://github.com/sgrubas/NES) is framework for solving factored eikonal equation using physics-informed neural network, for details see our [paper](https://arxiv.org/abs/2205.07989).
 
 ## Tutorials
 See quick introduction on [Google Colab](https://colab.research.google.com/github/sgrubas/NES/blob/main/notebooks/NES_Introduction.ipynb)
