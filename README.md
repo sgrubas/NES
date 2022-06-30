@@ -39,7 +39,7 @@ T = Eik.Traveltime(X)
 ```
 
 # Citation
-If you find NES useful for your research, please cite:
+If you find NES useful for your research, please cite our paper:
 ```
 @misc{grubas2022NES,
   title = {Neural Eikonal Solver: improving accuracy of physics-informed neural networks for solving eikonal equation in case of caustics},
