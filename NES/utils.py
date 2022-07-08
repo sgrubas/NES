@@ -289,6 +289,140 @@ class NES_EarlyStopping(tf.keras.callbacks.Callback):
 
 
 #######################################################################
+                           ### VELOCITY ###
+#######################################################################
+
+# class BaseVelocity:
+#     r"""
+#         Base class for velocity models used to train NES. 
+#         There are a few mandatory properties that must be defined in `__init__` 
+#         or `__call__` methods BEFORE passing it to NES.
+
+#         Properties:
+#             dim : int : dimensions
+#             xmin : list of floats : minimum coordinates of the domain
+#             xmax : list of floats : maximum coordinates of the domain
+#             min : float : minimum velocity value
+#             max : float : maximum velocity value
+#     """
+
+#     dim = None # dimensions
+#     xmin = None # minimum coordinates of the domain
+#     xmax = None # maximum coordinates of the domain
+#     min = None # minimum velocity value
+#     max = None # maximum velocity value
+
+#     def __init__(self, **kwargs):
+#         """
+#             Arguments:
+#                 kwargs : dict : arguments defining a specific velocity model 
+#         """
+#         pass
+
+#     def __call__(self, X):
+#         """
+#             Arguments:
+#                 X : numpy NDarray : has shape `(... , dim)` where `dim` refers to `BaseVelocity.dim`
+
+#             Return:
+#                 V : numpy NDarray : velocity at `X` coordinates with shape `(... , 1)` or `(... , )`
+#         """
+#         pass
+
+#     def gradient(self, X):
+#         """
+#             Arguments:
+#                 X : numpy NDarray : has shape `(... , dim)` where `dim` refers to `BaseVelocity.dim`
+
+#             Return:
+#                 dV : numpy NDarray : gradient of velocity at `X` coordinates with shape `(... , dim)` 
+#         """
+#         pass
+
+#     def laplacian(self, X):
+#         """
+#             Arguments:
+#                 X : numpy NDarray : has shape `(... , dim)` where `dim` refers to `BaseVelocity.dim`
+
+#             Return:
+#                 LV : numpy NDarray : laplacian of velocity at `X` coordinates with shape `(... , 1)` or `(... , )`
+#         """
+#         pass
+
+
+# class Interpolator:
+#     """
+#         Interpolator using 'scipy.interpolate.RegularGridInterpolator'
+
+#     """    
+    
+#     F = None 
+#     dF = None
+#     LF = None
+#     axes = None
+#     Func = None # used in NES
+#     dFunc = None
+#     LFunc = None
+
+#     dim = None # used in NES
+#     xmin = None # used in NES
+#     xmax = None # used in NES
+#     min = None # used in NES
+#     max = None # used in NES
+
+#     def __init__(self, F, *axes, **interp_kw):
+#         """
+#         The interpolator uses 'scipy.interpolate.RegularGridInterpolator'
+        
+#         Arguments:
+#             F: numpy array (nx,) or (nx,ny) or (nx,ny,nz)
+#                 Values 
+#             axes: tuple of numpy arrays (nx,), (ny), (nz)
+#                 Grid
+#             interp_kw: dictionary of keyword arguments for 'scipy.interpolate.RegularGridInterpolator'
+#         """
+#         self.dim = len(F.shape)
+#         self.axes = axes
+#         self.F = F
+#         self.Func = RegularGridInterpolator(axes, F, **interp_kw)
+
+#         self.xmin = [xi.min() for xi in axes]
+#         self.xmax = [xi.max() for xi in axes]
+#         self.min = F.min()
+#         self.max = F.max()
+
+#     def __call__(self, X):
+#         """
+#         Computes values of function using interpolation at points X
+#         """
+#         return self.Func(X)
+
+#     def gradient(self, X, **interp_kw):
+#         """
+#         Computes partial derivatives (using default np.gradient) of function using interpolation at points X
+#         """
+#         if self.dFunc is None:
+#             self.dF = np.stack(np.gradient(self.F, *self.axes), axis=-1)
+#             self.dFunc = RegularGridInterpolator(self.axes, self.dF, **interp_kw)
+#         return self.dFunc(X)
+
+#     def laplacian(self, X, **interp_kw):
+#         """
+#         Computes laplacian (using default np.gradient) of function using interpolation at points X
+#         """
+#         if self.dFunc is None:
+#             self.dF = np.stack(np.gradient(self.F, *self.axes), axis=-1)
+#             self.dFunc = RegularGridInterpolator(self.axes, self.dF, **interp_kw)
+
+#         if self.LFunc is None:
+#             d2F = [np.gradient(self.dF[...,i], xi, axis=i) for i, xi in enumerate(self.axes)]
+#             L = np.sum(np.stack(d2F, axis=-1), axis=-1)
+#             self.LFunc = RegularGridInterpolator(self.axes, L, **interp_kw)
+
+#         return self.LFunc(X)
+
+
+#######################################################################
                             ### OTHER ###
 #######################################################################
 
@@ -325,76 +459,6 @@ class Initializer(initializers.Initializer):
 
     def get_config(self):
         return {'x': self.x}
-
-class Interpolator:
-    """
-        Interpolator using 'scipy.interpolate.RegularGridInterpolator'
-
-    """    
-    dim = None # used in NES
-    F = None 
-    dF = None
-    LF = None
-    axes = None
-    Func = None # used in NES
-    dFunc = None
-    LFunc = None
-    xmin = None # used in NES
-    xmax = None # used in NES
-    min = None # used in NES
-    max = None # used in NES
-
-    def __init__(self, F, *axes, **interp_kw):
-        """
-        The interpolator uses 'scipy.interpolate.RegularGridInterpolator'
-        
-        Arguments:
-            F: numpy array (nx,) or (nx,ny) or (nx,ny,nz)
-                Values 
-            axes: tuple of numpy arrays (nx,), (ny), (nz)
-                Grid
-            interp_kw: dictionary of keyword arguments for 'scipy.interpolate.RegularGridInterpolator'
-        """
-        self.dim = len(F.shape)
-        self.axes = axes
-        self.F = F
-        self.Func = RegularGridInterpolator(axes, F, **interp_kw)
-
-        self.xmin = [xi.min() for xi in axes]
-        self.xmax = [xi.max() for xi in axes]
-        self.min = F.min()
-        self.max = F.max()
-
-    def __call__(self, X):
-        """
-        Computes values of function using interpolation at points X
-        """
-        return self.Func(X)
-
-    def gradient(self, X, **interp_kw):
-        """
-        Computes partial derivatives (using default np.gradient) of function using interpolation at points X
-        """
-        if self.dFunc is None:
-            self.dF = np.stack(np.gradient(self.F, *self.axes), axis=-1)
-            self.dFunc = RegularGridInterpolator(self.axes, self.dF, **interp_kw)
-        return self.dFunc(X)
-
-    def laplacian(self, X, **interp_kw):
-        """
-        Computes laplacian (using default np.gradient) of function using interpolation at points X
-        """
-        if self.dFunc is None:
-            self.dF = np.stack(np.gradient(self.F, *self.axes), axis=-1)
-            self.dFunc = RegularGridInterpolator(self.axes, self.dF, **interp_kw)
-
-        if self.LFunc is None:
-            d2F = [np.gradient(self.dF[...,i], xi, axis=i) for i, xi in enumerate(self.axes)]
-            L = np.sum(np.stack(d2F, axis=-1), axis=-1)
-            self.LFunc = RegularGridInterpolator(self.axes, L, **interp_kw)
-
-        return self.LFunc(X)
-
 
 class RegularGrid:
     """
