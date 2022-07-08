@@ -336,12 +336,12 @@ class NES_OP:
             self.compile()
 
         train_kw.setdefault('callbacks', [])
-        if isinstance(tolerance, (float, tf.keras.callbacks.Callback)):
-            if isinstance(tolerance, float):
-                EarlyStopping = utils.NES_EarlyStopping(tolerance=tolerance)
-            else:
-                EarlyStopping = tolerance
-            train_kw['callbacks'].append(EarlyStopping)
+        if isinstance(tolerance, float):
+            train_kw['callbacks'].append(utils.NES_EarlyStopping(tolerance=tolerance))
+        elif isinstance(tolerance, tf.keras.callbacks.Callback):
+            train_kw['callbacks'].append(tolerance)
+        else:
+            pass
 
         h = self.model.fit(*data, **train_kw)
         return h
@@ -1019,12 +1019,12 @@ class NES_TP:
             self.compile()
 
         train_kw.setdefault('callbacks', [])
-        if isinstance(tolerance, (float, tf.keras.callbacks.Callback)):
-            if isinstance(tolerance, float):
-                EarlyStopping = utils.NES_EarlyStopping(tolerance=tolerance)
-            else:
-                EarlyStopping = tolerance
-            train_kw['callbacks'].append(EarlyStopping)
+        if isinstance(tolerance, float):
+            train_kw['callbacks'].append(utils.NES_EarlyStopping(tolerance=tolerance))
+        elif isinstance(tolerance, tf.keras.callbacks.Callback):
+            train_kw['callbacks'].append(tolerance)
+        else:
+            pass
 
         h = self.model.fit(*data, **train_kw)
         return h
