@@ -5,7 +5,7 @@ from tensorflow.keras.layers.experimental.preprocessing import Rescaling
 from tensorflow.keras.models import Model
 from .utils import Uniform_PDF, RegularGrid, DenseBody, Diff, SourceLoc, NES_EarlyStopping, data_handler, Activation
 from .eikonalLayers import IsoEikonal
-import pickle, pathlib, shutil
+import pickle, pathlib, shutil, os
 
 ###############################################################################
                     ### ONE POINT NEURAL EIKONAL SOLVER ###
@@ -382,26 +382,28 @@ class NES_OP:
         if pathlib.Path(filepath).is_dir():
             shutil.rmtree(filepath)
         pathlib.Path(filepath).mkdir(parents=True, exist_ok=False)
-        filename = filepath.split('/')[-1].split('.')[0]
+
+        folder = os.path.split(filepath)[-1]
+        filename = lambda kw: os.path.join(filepath, f'{folder}_{kw}')
 
         # Model configuration
-        config_filename = f'{filepath}/{filename}_config.pkl'
+        config_filename = filename('config.pkl')
         with open(config_filename, 'wb') as f: 
             pickle.dump(config, f)
 
         # Model weights
-        weights_filename = filepath + f'/{filename}_weights.h5'
+        weights_filename = filename('weights.h5')
         self.outs['T'].save_weights(weights_filename)
 
         # Optimizer state
         if save_optimizer:
-            opt_filename = f'{filepath}/{filename}_optimizer.pkl'
+            opt_filename = filename('optimizer.pkl')
             with open(opt_filename, 'wb') as f: 
                 pickle.dump(NES_OP._pack_opt_config(self.model), f)
 
         # Training set of collocation points
         if training_data:
-            data_filename = f'{filepath}/{filename}_train_data.pkl'
+            data_filename = filename('train_data.pkl')
             with open(data_filename, 'wb') as f: 
                 pickle.dump(self.x_train, f)
 
@@ -417,10 +419,11 @@ class NES_OP:
             Returns:
                 NES_OP instance 
         """
-        filename = filepath.split('/')[-1].split('.')[0]
+        folder = os.path.split(filepath)[-1]
+        filename = lambda kw: os.path.join(filepath, f'{folder}_{kw}')
 
         # Importing configuration data
-        config_filename = f'{filepath}/{filename}_config.pkl'
+        config_filename = filename('config.pkl')
         with open(config_filename, 'rb') as f: 
             config = pickle.load(f)
 
@@ -433,12 +436,12 @@ class NES_OP:
         NES_OP_instance.build_model(**config)
 
         # Loading weights
-        weights_filename = filepath + f'/{filename}_weights.h5'
+        weights_filename = filename('weights.h5')
         NES_OP_instance.outs['T'].load_weights(weights_filename, by_name=False)
         print(f'Loaded model from "{filepath}"')
 
         # Loading optimizer state if available
-        opt_filename = f'{filepath}/{filename}_optimizer.pkl'
+        opt_filename = filename('optimizer.pkl')
         if pathlib.Path(opt_filename).is_file():
             with open(opt_filename, 'rb') as f: 
                 opt_config = pickle.load(f)
@@ -446,7 +449,7 @@ class NES_OP:
             print('Compiled the model with saved optimizer')
 
         # Loading training data if available
-        data_filename = f'{filepath}/{filename}_train_data.pkl'
+        data_filename = filename('train_data.pkl')
         if pathlib.Path(data_filename).is_file():
             with open(data_filename, 'rb') as f: 
                 NES_OP_instance.x_train = pickle.load(f)
@@ -1063,28 +1066,30 @@ class NES_TP:
         if pathlib.Path(filepath).is_dir():
             shutil.rmtree(filepath)
         pathlib.Path(filepath).mkdir(parents=True, exist_ok=False)
-        filename = filepath.split('/')[-1].split('.')[0]
+
+        folder = os.path.split(filepath)[-1]
+        filename = lambda kw: os.path.join(filepath, f'{folder}_{kw}')
 
         # Model configuration
-        config_filename = f'{filepath}/{filename}_config.pkl'
-        with open(config_filename, 'wb') as f: 
+        config_filename = filename('config.pkl')
+        with open(config_filename, 'wb') as f:
             pickle.dump(config, f)
 
         # Model weights
-        weights_filename = f'{filepath}/{filename}_weights.pkl'
+        weights_filename = filename('weights.pkl')
         weights = self.outs['T'].get_weights()
-        with open(weights_filename, 'wb') as f: 
+        with open(weights_filename, 'wb') as f:
             pickle.dump(weights, f)
 
         # Optimizer state
         if save_optimizer:
-            opt_filename = f'{filepath}/{filename}_optimizer.pkl'
+            opt_filename = filename('optimizer.pkl')
             with open(opt_filename, 'wb') as f: 
                 pickle.dump(NES_TP._pack_opt_config(self.model), f)
 
         # Training set of collocation points
         if training_data:
-            data_filename = f'{filepath}/{filename}_train_data.pkl'
+            data_filename = filename('train_data.pkl')
             with open(data_filename, 'wb') as f: 
                 pickle.dump(self.x_train, f)
 
@@ -1100,10 +1105,11 @@ class NES_TP:
             Returns:
                 NES_TP instance 
         """
-        filename = filepath.split('/')[-1].split('.')[0]
+        folder = os.path.split(filepath)[-1]
+        filename = lambda kw: os.path.join(filepath, f'{folder}_{kw}')
 
         # Importing configuration data
-        config_filename = f'{filepath}/{filename}_config.pkl'
+        config_filename = filename('config.pkl')
         with open(config_filename, 'rb') as f: 
             config = pickle.load(f)
 
@@ -1116,14 +1122,14 @@ class NES_TP:
         NES_TP_instance.build_model(**config)
         
         # Loading weights
-        weights_filename = f'{filepath}/{filename}_weights.pkl'
+        weights_filename = filename('weights.pkl')
         with open(weights_filename, 'rb') as f: 
             weights = pickle.load(f)
         NES_TP_instance.outs['T'].set_weights(weights)
         print(f'Loaded model from "{filepath}"')
 
         # Loading optimizer state if available
-        opt_filename = f'{filepath}/{filename}_optimizer.pkl'
+        opt_filename = filename('optimizer.pkl')
         if pathlib.Path(opt_filename).is_file():
             with open(opt_filename, 'rb') as f: 
                 opt_config = pickle.load(f)
@@ -1131,7 +1137,7 @@ class NES_TP:
             print('Compiled the model with saved optimizer')
 
         # Loading training data if available
-        data_filename = f'{filepath}/{filename}_train_data.pkl'
+        data_filename = filename('train_data.pkl')
         if pathlib.Path(data_filename).is_file():
             with open(data_filename, 'rb') as f: 
                 NES_TP_instance.x_train = pickle.load(f)
