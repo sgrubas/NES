@@ -27,7 +27,7 @@ pip install git+https://github.com/sgrubas/NES.git
 ```python
 import NES
 
-Vel = NES.misc.MarmousiSmoothedPart()
+Vel = NES.velocity.MarmousiSmoothedPart()
 Eik = NES.NES_TP(velocity=Vel)
 Eik.build_model()
 h = Eik.train(x_train=100000, epochs=1000, batch_size=25000)
