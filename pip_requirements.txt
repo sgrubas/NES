@@ -20,9 +20,9 @@ cryptography
 cycler
 debugpy
 decorator
-defusedxm
+defusedxml
 eikonalfm==0.9.5
-entrypoint
+entrypoints
 executing
 fastjsonschema
 flatbuffers==1.12
@@ -40,7 +40,7 @@ ipykernel
 ipython
 ipython-genutils
 ipywidgets
-jed
+jedi
 Jinja2
 joblib==1.1.0
 jsonschema
