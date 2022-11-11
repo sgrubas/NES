@@ -28,7 +28,8 @@ ACTS = {
         'abs_linear' : tf.abs,
         'gauss' : lambda z: tf.math.exp(-z**2),
         'swish' : lambda z: z * tf.math.sigmoid(z),
-        'laplace' : lambda z: tf.math.exp(-tf.abs(z))
+        'laplace' : lambda z: tf.math.exp(-tf.abs(z)),
+        'gauslace' : lambda z: tf.math.exp(-z**2) + tf.math.exp(-tf.abs(z)),
         }
 
 class AdaptiveActivation(L.Layer):
