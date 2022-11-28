@@ -41,14 +41,17 @@ T = Eik.Traveltime(X)
 # Citation
 If you find NES useful for your research, please cite our paper:
 ```
-@misc{grubas2022NES,
-  title = {Neural Eikonal Solver: improving accuracy of physics-informed neural networks for solving eikonal equation in case of caustics},
-  doi = {10.48550/ARXIV.2205.07989}, 
-  url = {https://arxiv.org/abs/2205.07989},
-  author = {Grubas, Serafim and Duchkov, Anton and Loginov, Georgy},
-  publisher = {arXiv},
-  year = {2022},
-  copyright = {Creative Commons Attribution 4.0 International}
+@article{grubas2023NES,
+title = {Neural Eikonal solver: Improving accuracy of physics-informed neural networks for solving eikonal equation in case of caustics},
+journal = {Journal of Computational Physics},
+volume = {474},
+pages = {111789},
+year = {2023},
+issn = {0021-9991},
+doi = {https://doi.org/10.1016/j.jcp.2022.111789},
+url = {https://www.sciencedirect.com/science/article/pii/S002199912200852X},
+author = {Serafim Grubas and Anton Duchkov and Georgy Loginov},
+keywords = {Physics-informed neural network, Eikonal equation, Seismic, Traveltimes, Caustics}
 }
 ```
 
