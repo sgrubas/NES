@@ -66,6 +66,8 @@ keywords = {Physics-informed neural network, Eikonal equation, Seismic, Travelti
 
 # Future plans
 *  Anisotropic eikonal
+*  Ray tracing
+*  Wave amplitudes
 *  Earthquake localization
 *  Traveltime tomography
 
