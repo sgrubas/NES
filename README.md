@@ -38,6 +38,15 @@ X = grid.sou_rec_pairs(Xs, Xr)
 T = Eik.Traveltime(X)
 ```
 
+# 2D examples of NES-OP
+Isochrones of solutions. Percents above the figures show the solution error as relative MAE with respect to the second-order factored Fast Marching Method.
+
+<img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_Sinus_0.06.png" alt="0.06%" width="400"/> <img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_GaussianPlus_0.12.png" alt="0.12%" width="400"/>
+
+<img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_Flower_0.42.png" alt="0.42%" width="400"/> <img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_Boxes_0.28.png" alt="0.28%" width="400"/>
+
+<img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_Layered_0.33.png" alt="0.33%" width="400"/> <img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_LayeredBoxGauss_0.34.png" alt="0.34%" width="400"/>
+
 # Citation
 If you find NES useful for your research, please cite our paper:
 ```
