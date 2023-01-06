@@ -1,7 +1,7 @@
 # Neural Eikonal Solver
 [**Neural Eikonal Solver (NES)**](https://github.com/sgrubas/NES) is framework for solving factored eikonal equation using physics-informed neural network, for details see our paper: [early arXiv version](https://arxiv.org/abs/2205.07989) and [published final version](https://authors.elsevier.com/a/1g9st_W0q-3gK).
 
-## Tutorials
+## Description
 See quick introduction on [Google Colab](https://colab.research.google.com/github/sgrubas/NES/blob/main/notebooks/NES_Introduction.ipynb)
 
 NES has two solvers:
@@ -16,7 +16,16 @@ NES has two solvers:
 <img src="https://render.githubusercontent.com/render/math?math=|\nabla_s T|=\displaystyle\frac{1}{v_s}">
 </p>
 
-So far, NES outperforms all existing neural-network based solutions. See our comparisons with [EikoNet](https://github.com/sgrubas/NES/blob/main/notebooks/EikoNet_NES-TP_Marmousi.ipynb) and [PINNeik](https://github.com/sgrubas/NES/blob/main/notebooks/PINNeik_NES-OP_Marmousi.ipynb).
+So far, NES outperforms all existing neural-network based solutions. Table shows average performance results on a smoothed part of Marmousi model. RMAE is relative mean-absolute error. The tests were performed on GPU Tesla P100-PCIE.
+
+|Solver   	|RMAE, %   	|Training time, sec   	|Network size   	|
+|---	|---	|---	|---	|
+|**NES-OP**   	|**0.2**  	|**240**   	|**7856**   	|
+|PINNeik   	|12.4   	|330   	|4061   	|
+|**NES-TP**   	|**0.4**   	|**300**   	|**51308**   	|
+|EikoNet   	|5.4   	|9600  	|7913249   	|
+
+For detailed comparisons see our colab notebooks [EikoNet](https://github.com/sgrubas/NES/blob/main/notebooks/EikoNet_NES-TP_Marmousi.ipynb) and [PINNeik](https://github.com/sgrubas/NES/blob/main/notebooks/PINNeik_NES-OP_Marmousi.ipynb).
 
 ## Installation
 ```python
