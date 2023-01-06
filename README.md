@@ -39,7 +39,7 @@ T = Eik.Traveltime(X)
 ```
 
 # 2D examples of NES-OP
-Isochrones of solutions. Percents above the figures show the solution error as relative MAE with respect to the second-order factored Fast Marching Method.
+Isochrones of solutions. Percents above the figures show the relative MAE of the NES solution (white dashed isochrones) with respect to the reference solution the second-order factored Fast Marching Method (black isochrones). 
 
 <img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_Sinus_0.06.png" alt="0.06%" width="400"/> <img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_GaussianPlus_0.12.png" alt="0.12%" width="400"/>
 
