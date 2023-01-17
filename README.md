@@ -16,7 +16,7 @@ NES has two solvers:
 <img src="https://render.githubusercontent.com/render/math?math=|\nabla_s T|=\displaystyle\frac{1}{v_s}">
 </p>
 
-So far, NES outperforms all existing neural-network based solutions. Table shows average performance results on a smoothed part of Marmousi model. RMAE is relative mean-absolute error with respect to the reference solution (second-order factored Fast Marching Method). The tests were performed on GPU Tesla P100-PCIE.
+So far, NES outperforms all existing neural-network based solutions. Table shows average performance results on a smoothed part of Marmousi model (NES-OP vs. PINNeik and NES-TP vs. EikoNet). RMAE is relative mean-absolute error with respect to the reference solution (second-order factored Fast Marching Method). The tests were performed on GPU Tesla P100-PCIE.
 
 |Solver   	|RMAE, %   	|Training time, sec   	|Network size   	|
 |---	|---	|---	|---	|
