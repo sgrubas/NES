@@ -20,10 +20,10 @@ So far, NES outperforms all existing neural-network based solutions. Table shows
 
 |Solver   	|RMAE, %   	|Training time, sec   	|Network size   	|
 |---	|---	|---	|---	|
-|**NES-OP**   	|**0.2**  	|**240**   	|**7856**   	|
-|PINNeik   	|12.4   	|330   	|4061   	|
-|**NES-TP**   	|**0.4**   	|**300**   	|**51308**   	|
-|EikoNet   	|5.4   	|9600  	|7913249   	|
+|**NES-OP** (ours)   	|**0.2**  	|**240**   	|**7856**   	|
+|[PINNeik](https://doi.org/10.1016/j.cageo.2021.104833)   	|12.4   	|330   	|4061   	|
+|**NES-TP** (ours)  	|**0.4**   	|**300**   	|**51308**   	|
+|[EikoNet](https://doi.org/10.1109/TGRS.2020.3039165)   	|5.4   	|9600  	|7913249   	|
 
 For detailed comparisons see our colab notebooks [EikoNet](https://github.com/sgrubas/NES/blob/main/notebooks/EikoNet_NES-TP_Marmousi.ipynb) and [PINNeik](https://github.com/sgrubas/NES/blob/main/notebooks/PINNeik_NES-OP_Marmousi.ipynb).
 
