@@ -6,15 +6,14 @@ See quick introduction on [Google Colab](https://colab.research.google.com/githu
 
 NES has two solvers:
 1.   **One-Point NES (NES-OP)** is to solve conventional one-point eikonal ([NES-OP tutorial](https://github.com/sgrubas/NES/blob/main/notebooks/NES-OP_Tutorial.ipynb))
-<p align="center">
-<img src="https://render.githubusercontent.com/render/math?math=|\nabla \tau|=\displaystyle\frac{1}{v}">
-</p>
+
+$$\Vert \nabla \tau(\textbf{x}) \Vert = \frac{1}{v(\textbf{x})}$$
 
 3.   **Two-Point NES (NES-TP)** is to solve generalized two-point eikonal ([NES-TP tutorial](https://github.com/sgrubas/NES/blob/main/notebooks/NES-TP_Tutorial.ipynb))
-<p align="center">
-<img src="https://render.githubusercontent.com/render/math?math=|\nabla_r T|=\displaystyle\frac{1}{v_r}"> &nbsp;&nbsp;   
-<img src="https://render.githubusercontent.com/render/math?math=|\nabla_s T|=\displaystyle\frac{1}{v_s}">
-</p>
+
+$$\Vert \nabla_r T(\textbf{x}_s, \textbf{x}_r) \Vert = \frac{1}{v(\textbf{x}_r)}$$
+
+$$\Vert \nabla_s T(\textbf{x}_s, \textbf{x}_r) \Vert = \frac{1}{v(\textbf{x}_s)}$$
 
 So far, NES outperforms all existing neural-network based solutions. Table shows average performance results on a smoothed part of Marmousi model (NES-OP vs. PINNeik and NES-TP vs. EikoNet). RMAE is relative mean-absolute error with respect to the reference solution (second-order factored Fast Marching Method). The tests were performed on GPU Tesla P100-PCIE.
 
