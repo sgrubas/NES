@@ -301,7 +301,7 @@ class NES_OP:
                 **kwargs : keyword arguments : Arguments for 'tf.keras.models.Model.compile(**kwargs)'
         """
         if optimizer is None:
-            optimizer = tf.optimizers.Adam(learning_rate=lr, decay=decay)
+            optimizer = tf.optimizers.Adam(learning_rate=lr, weight_decay=decay)
 
         self.model.compile(optimizer=optimizer, loss=loss, **kwargs)
         self.compiled = True
@@ -986,7 +986,7 @@ class NES_TP:
                 **kwargs : keyword arguments : Arguments for 'tf.keras.models.Model.compile(**kwargs)'
         """
         if optimizer is None:
-            optimizer = tf.optimizers.Adam(learning_rate=lr, decay=decay)
+            optimizer = tf.optimizers.Adam(learning_rate=lr, weight_decay=decay)
 
         self.model.compile(optimizer=optimizer, loss=loss, **kwargs)
         self.compiled = True
