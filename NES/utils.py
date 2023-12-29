@@ -148,7 +148,8 @@ class SourceLoc(L.Layer):
     """
     def __init__(self, xs, **kwargs):
         super(SourceLoc, self).__init__(**kwargs)
-        self.xs = self.add_weight(name='xs', shape=(len(xs),),
+        self.xs = self.add_weight(name=kwargs.get('name', 'xs'),
+                                  shape=(len(xs),),
                                   trainable=False, 
                                   initializer=Initializer(xs))
 
@@ -289,138 +290,73 @@ class NES_EarlyStopping(tf.keras.callbacks.Callback):
         return monitor_value
 
 
-#######################################################################
-                           ### VELOCITY ###
-#######################################################################
+class NES_BestWeights(tf.keras.callbacks.Callback):
+    """Keeps only the best weights of the model.
 
-# class BaseVelocity:
-#     r"""
-#         Base class for velocity models used to train NES. 
-#         There are a few mandatory properties that must be defined in `__init__` 
-#         or `__call__` methods BEFORE passing it to NES.
+    Args:
+        NES: NES instance
+        monitor: Quantity to be monitored ('loss' or 'val_loss'). By default, 'loss'
+        freq: how often save weights
+        verbose: verbosity mode (0 or 1).
+        conversion: conversion function from "loss" to "RMAE"
+    """
 
-#         Properties:
-#             dim : int : dimensions
-#             xmin : list of floats : minimum coordinates of the domain
-#             xmax : list of floats : maximum coordinates of the domain
-#             min : float : minimum velocity value
-#             max : float : maximum velocity value
-#     """
+    def __init__(self,
+                 NES,
+                 monitor='loss',
+                 freq=50,
+                 verbose=1,
+                 conversion=lambda x: x * 10**(-0.16),
 
-#     dim = None # dimensions
-#     xmin = None # minimum coordinates of the domain
-#     xmax = None # maximum coordinates of the domain
-#     min = None # minimum velocity value
-#     max = None # maximum velocity value
+                 ):
+        super(NES_BestWeights, self).__init__()
+        assert monitor == 'loss' or monitor == 'val_loss', \
+            "Only 'loss' and 'val_loss' are supported for monitor metric"
 
-#     def __init__(self, **kwargs):
-#         """
-#             Arguments:
-#                 kwargs : dict : arguments defining a specific velocity model 
-#         """
-#         pass
+        self.model = NES
+        self.monitor = monitor
+        self.verbose = verbose
+        self.freq = freq
+        self.best_monitor = np.inf
+        self.best_epoch = None
+        self.best_weights = None
+        self.conversion = conversion
 
-#     def __call__(self, X):
-#         """
-#             Arguments:
-#                 X : numpy NDarray : has shape `(... , dim)` where `dim` refers to `BaseVelocity.dim`
+    def on_train_begin(self, logs=None):
+        # Allow instances to be re-used
+        self.best_monitor = np.inf
+        self.best_rmae = np.inf
+        self.best_epoch = None
+        self.best_weights = None
 
-#             Return:
-#                 V : numpy NDarray : velocity at `X` coordinates with shape `(... , 1)` or `(... , )`
-#         """
-#         pass
+    def on_epoch_end(self, epoch, logs=None):
+        current = self.get_monitor_value(logs)
+        if current is None:
+            return
+        if (epoch > 0) and (epoch % self.freq == 0) and (current < self.best_monitor):
+            self.best_monitor = current
+            self.best_rmae = self.conversion(current)
+            self.best_epoch = epoch
+            self.best_weights = self.model.get_weights()
 
-#     def gradient(self, X):
-#         """
-#             Arguments:
-#                 X : numpy NDarray : has shape `(... , dim)` where `dim` refers to `BaseVelocity.dim`
+            if self.verbose:
+                print('Epoch %05d: saving best weights' % (epoch + 1))
+                print(f'{self.monitor}: {self.best_monitor:.5f}')
+                print(f'RMAE ~ {100 * self.best_rmae:.5f} %\n')
 
-#             Return:
-#                 dV : numpy NDarray : gradient of velocity at `X` coordinates with shape `(... , dim)` 
-#         """
-#         pass
+    def on_train_end(self, logs=None):
+        self.model.set_weights(self.best_weights)
+        if self.verbose:
+            print("Set the best weights for the model\n")
 
-#     def laplacian(self, X):
-#         """
-#             Arguments:
-#                 X : numpy NDarray : has shape `(... , dim)` where `dim` refers to `BaseVelocity.dim`
-
-#             Return:
-#                 LV : numpy NDarray : laplacian of velocity at `X` coordinates with shape `(... , 1)` or `(... , )`
-#         """
-#         pass
-
-
-# class Interpolator:
-#     """
-#         Interpolator using 'scipy.interpolate.RegularGridInterpolator'
-
-#     """    
-    
-#     F = None 
-#     dF = None
-#     LF = None
-#     axes = None
-#     Func = None # used in NES
-#     dFunc = None
-#     LFunc = None
-
-#     dim = None # used in NES
-#     xmin = None # used in NES
-#     xmax = None # used in NES
-#     min = None # used in NES
-#     max = None # used in NES
-
-#     def __init__(self, F, *axes, **interp_kw):
-#         """
-#         The interpolator uses 'scipy.interpolate.RegularGridInterpolator'
-        
-#         Arguments:
-#             F: numpy array (nx,) or (nx,ny) or (nx,ny,nz)
-#                 Values 
-#             axes: tuple of numpy arrays (nx,), (ny), (nz)
-#                 Grid
-#             interp_kw: dictionary of keyword arguments for 'scipy.interpolate.RegularGridInterpolator'
-#         """
-#         self.dim = len(F.shape)
-#         self.axes = axes
-#         self.F = F
-#         self.Func = RegularGridInterpolator(axes, F, **interp_kw)
-
-#         self.xmin = [xi.min() for xi in axes]
-#         self.xmax = [xi.max() for xi in axes]
-#         self.min = F.min()
-#         self.max = F.max()
-
-#     def __call__(self, X):
-#         """
-#         Computes values of function using interpolation at points X
-#         """
-#         return self.Func(X)
-
-#     def gradient(self, X, **interp_kw):
-#         """
-#         Computes partial derivatives (using default np.gradient) of function using interpolation at points X
-#         """
-#         if self.dFunc is None:
-#             self.dF = np.stack(np.gradient(self.F, *self.axes), axis=-1)
-#             self.dFunc = RegularGridInterpolator(self.axes, self.dF, **interp_kw)
-#         return self.dFunc(X)
-
-#     def laplacian(self, X, **interp_kw):
-#         """
-#         Computes laplacian (using default np.gradient) of function using interpolation at points X
-#         """
-#         if self.dFunc is None:
-#             self.dF = np.stack(np.gradient(self.F, *self.axes), axis=-1)
-#             self.dFunc = RegularGridInterpolator(self.axes, self.dF, **interp_kw)
-
-#         if self.LFunc is None:
-#             d2F = [np.gradient(self.dF[...,i], xi, axis=i) for i, xi in enumerate(self.axes)]
-#             L = np.sum(np.stack(d2F, axis=-1), axis=-1)
-#             self.LFunc = RegularGridInterpolator(self.axes, L, **interp_kw)
-
-#         return self.LFunc(X)
+    def get_monitor_value(self, logs):
+        logs = logs or {}
+        monitor_value = logs.get(self.monitor)
+        if monitor_value is None:
+          logging.warning('The callback conditioned on metric `%s` '
+                          'which is not available. Available metrics are: %s',
+                          self.monitor, ','.join(list(logs.keys())))
+        return monitor_value
 
 
 #######################################################################
@@ -447,6 +383,7 @@ def data_handler(x, y, **kwargs):
 
     return data
 
+
 class Initializer(initializers.Initializer):
     """
         Initializer that converts 'numpy array' to 'tf.Tensor'
@@ -460,6 +397,7 @@ class Initializer(initializers.Initializer):
 
     def get_config(self):
         return {'x': self.x}
+
 
 class RegularGrid:
     """

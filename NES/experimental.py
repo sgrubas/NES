@@ -189,7 +189,7 @@ class RARsampling(tf.keras.callbacks.Callback):
         self.tp = TP_solver(NES)
         self.pdf = utils.Uniform_PDF(self.NES.velocity)
         self.m = m
-        self.res_pts = res_pts
+        self.res_pts = max(res_pts, m)
         self.freq = freq
         self.verbose = verbose
         self.eps = eps

@@ -5,7 +5,13 @@ from tensorflow.keras.layers.experimental.preprocessing import Rescaling
 from tensorflow.keras.models import Model
 from .utils import Uniform_PDF, RegularGrid, DenseBody, Diff, SourceLoc, NES_EarlyStopping, data_handler, Activation
 from .eikonalLayers import IsoEikonal
-import pickle, pathlib, shutil, os
+from .velocity import BaseVelocity
+import pickle, pathlib, shutil, os, inspect
+
+
+Adam_opt = tf.keras.optimizers.Adam
+Adam_args = inspect.signature(Adam_opt).parameters.keys()
+compat_decay = 'weight_decay' if 'weight_decay' in Adam_args else 'decay'
 
 ###############################################################################
                     ### ONE POINT NEURAL EIKONAL SOLVER ###
@@ -25,8 +31,13 @@ class NES_OP:
                   If 'None', 'eikonalLayers.IsoEikonal(P=2, hamiltonian=True)' is used.
 
     """
-    def __init__(self, xs, velocity, eikonal=None):
-        
+    instance_num = 0
+
+    def __init__(self, xs, velocity, eikonal=None, name=None):
+
+        self.name = name if name is not None else f"NESOP{NES_OP.instance_num}"
+        NES_OP.instance_num += 1
+
         # Source
         if isinstance(xs, (list, np.ndarray)):
             self.xs = np.array(xs).squeeze()
@@ -35,7 +46,7 @@ class NES_OP:
             raise ValueError("Unrecognized 'xs' type")
         
         # Velocity
-        assert callable(velocity), "Must be callable in a format 'v(xr) = velocity(xr)'"
+        assert isinstance(velocity, BaseVelocity), "Must be instance of BaseVelocity"
         self.velocity = velocity
 
         # Input scale factor
@@ -44,10 +55,11 @@ class NES_OP:
 
         # Eikonal equation layer 
         if eikonal is None:
-            self.equation = IsoEikonal(name='IsoEikonal')
+            self.equation = IsoEikonal(name=f'{self.name}_IsoEikonal')
         else:
             assert isinstance(eikonal, L.Layer), "Eikonal should be an instance of keras Layer"   
             self.equation = eikonal
+            self.equation._name = f'{self.name}_{self.equation._name}'
 
         self.sing_eps = 1e-5    # tolerance for source singularity (to remove from training)
         self.x_train = None     # input training data
@@ -55,7 +67,9 @@ class NES_OP:
         self.compiled = False   # compilation status
         # config data of NN model to be reproducible
         self.config = {}
-    
+
+
+
     def build_model(self, nl=4, nu=50, act='ad-gauss-1', out_act='ad-sigmoid-1', 
                     input_scale=True, factored=True, out_vscale=True, **kwargs):       
         """
@@ -94,18 +108,20 @@ class NES_OP:
         for kw, v in kwargs.items():
             self.config[kw] = v
 
+        naming = lambda arg: f"{self.name}_{arg}"
+
         #### Receiver coordinate input
-        xr_list = [L.Input(shape=(1,), name=f'xr{i}') for i in range(self.dim)]
+        xr_list = [L.Input(shape=(1,), name=naming(f'xr{i}')) for i in range(self.dim)]
         self.xr_list = xr_list
 
         #### Source coordinate reduction
-        xr = L.Concatenate(name='xr', axis=-1)(xr_list)
-        xs = SourceLoc(self.xs, name='SourceLoc')(xr)
-        x = L.Subtract(name='Centering')([xr, xs])
+        xr = L.Concatenate(name=naming('xr'), axis=-1)(xr_list)
+        xs = SourceLoc(self.xs, name=naming('SourceLoc'))(xr)
+        x = L.Subtract(name=naming('Centering'))([xr, xs])
 
         #### Input scaling
         if input_scale:
-            x_sc = Rescaling(1 / self.xscale, name='input_scaling')(x)
+            x_sc = Rescaling(1 / self.xscale, name=naming('input_scaling'))(x)
         else:
             x_sc = x
         
@@ -115,24 +131,24 @@ class NES_OP:
         #### Factorized solution
         if out_vscale:
             vmin, vmax = self.velocity.min, self.velocity.max
-            T = L.Lambda(lambda z: (1 / vmin - 1 / vmax) * z + 1 / vmax, name='V_factor')(T)
+            T = L.Lambda(lambda z: (1 / vmin - 1 / vmax) * z + 1 / vmax, name=naming('V_factor'))(T)
         if factored:
-            D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='R_factor')(x)
-            T = L.Multiply(name='Traveltime')([T, D])
+            D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name=naming('R_factor'))(x)
+            T = L.Multiply(name=naming('Traveltime'))([T, D])
 
         #### Final Traveltime Model
         Tm = Model(inputs=xr_list, outputs=T, name=f"Model_{T.name.split('/')[0]}")
 
         #### Gradient
-        dT_list = Diff(name='gradients')([T, xr_list])
+        dT_list = Diff(name=naming('gradients'))([T, xr_list])
         self._dT_list = dT_list
-        dT = L.Concatenate(name='Gradient', axis=-1)(dT_list)
+        dT = L.Concatenate(name=naming('Gradient'), axis=-1)(dT_list)
         Gm = Model(inputs=xr_list, outputs=dT, name=f"Model_{dT.name.split('/')[0]}")
 
         #### Eikonal equation
-        v = L.Input(shape=(1,), name='v') # Velocity input
+        v = L.Input(shape=(1,), name=naming('v')) # Velocity input
         Eq = self.equation(dT_list, v)
-        Em = Model(inputs=xr_list + [v], outputs=Eq, name=f"Model_{Eq.name.split('/')[0]}")
+        Em = Model(inputs=xr_list + [v], outputs=Eq, name=f"Model_{naming(Eq.name.split('/')[0])}")
 
         # #### Full Hessian
         # H_list = []
@@ -256,7 +272,7 @@ class NES_OP:
         X = {}
         for kwi, inp in zip(model.input_names, model.inputs):
             shape = (-1,) + tuple(inp.shape.as_list()[1:])
-            if kwi == 'v':
+            if 'v' in kwi:
                 X[kwi] = velocity(x).reshape(*shape)
             else:
                 X[kwi] = x[..., int(kwi[-1])].reshape(*shape)
@@ -301,7 +317,8 @@ class NES_OP:
                 **kwargs : keyword arguments : Arguments for 'tf.keras.models.Model.compile(**kwargs)'
         """
         if optimizer is None:
-            optimizer = tf.optimizers.Adam(learning_rate=lr, weight_decay=decay)
+            opt_kwargs = {compat_decay: decay}
+            optimizer = Adam_opt(learning_rate=lr, **opt_kwargs)
 
         self.model.compile(optimizer=optimizer, loss=loss, **kwargs)
         self.compiled = True
@@ -376,6 +393,7 @@ class NES_OP:
         config = self.config
         config['velocity'] = self.velocity
         config['xs'] = self.xs
+        config['name'] = self.name
         config['equation.config'] = self.equation.get_config()
 
         # makedir
@@ -432,7 +450,8 @@ class NES_OP:
         eikonal = IsoEikonal.from_config(config.pop('equation.config'))
         NES_OP_instance = NES_OP(xs=config.pop('xs'), 
                                  velocity=config.pop('velocity'), 
-                                 eikonal=eikonal)
+                                 eikonal=eikonal,
+                                 name=config.pop('name'))
         NES_OP_instance.build_model(**config)
 
         # Loading weights
@@ -476,7 +495,8 @@ class NES_OP:
         if eikonal is None:
             eikonal = self.equation
 
-        NES_OP_instance = NES_OP(xs=xs, velocity=velocity, eikonal=eikonal)
+        NES_OP_instance = NES_OP(xs=xs, velocity=velocity,
+                                 eikonal=eikonal, name=f"{self.name}_copy")
         NES_OP_instance.build_model(**self.config)
         NES_OP_instance.outs['T'].set_weights(self.outs['T'].get_weights())
         NES_OP_instance._unpack_opt_config(NES_OP._pack_opt_config(self.model))
@@ -499,11 +519,14 @@ class NES_TP:
                   Format example - 'eikonal([tau_x, tau_y, tau_z], v(x, y, z))'. 
                   If 'None', 'eikonalLayers.IsoEikonal(P=2, hamiltonian=True)' is used.
     """
+    instance_num = 0
 
-    def __init__(self, velocity, eikonal=None):
-        
+    def __init__(self, velocity, eikonal=None, name=None):
+        self.name = name if name is not None else f"NESTP{NES_TP.instance_num}"
+        NES_TP.instance_num += 1
+
         # Velocity
-        assert callable(velocity), "Must be callable in a format 'v(xr) = velocity(xr)'"
+        assert isinstance(velocity, BaseVelocity), "Must be instance of BaseVelocity"
         self.velocity = velocity
         self.dim = self.velocity.dim
 
@@ -513,10 +536,11 @@ class NES_TP:
 
         # Eikonal equation layer 
         if eikonal is None:
-            self.equation = IsoEikonal(name='IsoEikonal')
+            self.equation = IsoEikonal(name=f'{self.name}_IsoEikonal')
         else:
-            assert isinstance(eikonal, L.Layer), "Eikonal should be an instance of keras Layer"   
+            assert isinstance(eikonal, L.Layer), "Eikonal should be an instance of keras Layer"
             self.equation = eikonal
+            self.equation._name = f'{self.name}_{self.equation._name}'
 
         self.sing_eps = 1e-5    # tolerance for source singularity (to remove from training)
         self.x_train = None     # input training data
@@ -568,23 +592,25 @@ class NES_TP:
         for kw, v in kwargs.items():
             self.config[kw] = v
 
+        naming = lambda arg: f"{self.name}_{arg}"
+
         #### Input for Source part
-        xs_list = [L.Input(shape=(1,), name='xs' + str(i)) for i in range(self.dim)]
+        xs_list = [L.Input(shape=(1,), name=naming(f'xs{i}')) for i in range(self.dim)]
         self.xs_list = xs_list
-        xs = L.Concatenate(name='xs', axis=-1)(xs_list)
+        xs = L.Concatenate(name=naming('xs'), axis=-1)(xs_list)
 
         #### Input for Receiver part
-        xr_list = [L.Input(shape=(1,), name='xr' + str(i)) for i in range(self.dim)]
+        xr_list = [L.Input(shape=(1,), name=naming(f'xr{i}')) for i in range(self.dim)]
         self.xr_list = xr_list
-        xr = L.Concatenate(name='xr', axis=-1)(xr_list)
+        xr = L.Concatenate(name=naming('xr'), axis=-1)(xr_list)
         
         #### Input list
         inputs = xs_list + xr_list
 
         #### Input scaling
-        X = L.Concatenate(name='x', axis=-1)([xs, xr])
+        X = L.Concatenate(name=naming('x'), axis=-1)([xs, xr])
         if input_scale:
-            X_sc = Rescaling(1 / self.xscale, name='X_scaling')(X)
+            X_sc = Rescaling(1 / self.xscale, name=naming('X_scaling'))(X)
         else:
             X_sc = X
 
@@ -593,48 +619,48 @@ class NES_TP:
 
         #### Reciprocity 
         if reciprocity: # T(xs,xr)=T(xr,xs)
-            t = Model(inputs=inputs, outputs=T, name='Model_No_Reciprocity')
+            t = Model(inputs=inputs, outputs=T, name=naming('Model_No_Reciprocity'))
             xsr = xs_list + xr_list; xrs = xr_list + xs_list;
             tsr = t(xsr); trs = t(xrs)
-            T = L.Lambda(lambda x: 0.5*(x[0] + x[1]), name='Reciprocity')([tsr, trs])
+            T = L.Lambda(lambda x: 0.5*(x[0] + x[1]), name=naming('Reciprocity'))([tsr, trs])
 
         #### Output activation
         T = L.Activation(Activation(out_act))(T)
         # Scaling to the range of [1/vmax , 1/vmin]. T is assumed to be in [0, 1]
         if out_vscale:
             vmin, vmax = self.velocity.min, self.velocity.max
-            T = L.Lambda(lambda z: (1 / vmin - 1 / vmax) * z + 1 / vmax, name='V_factor')(T)
+            T = L.Lambda(lambda z: (1 / vmin - 1 / vmax) * z + 1 / vmax, name=naming('V_factor'))(T)
 
         #### Factorization
         if factored:
             xr_xs = L.Subtract(name='xr_xs_difference')([xr, xs])
-            D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name='R_factor')(xr_xs)    
-            T = L.Multiply(name='Traveltime')([T, D])
+            D = L.Lambda(lambda z: tf.norm(z, axis=-1, keepdims=True), name=naming('R_factor'))(xr_xs)
+            T = L.Multiply(name=naming('Traveltime'))([T, D])
 
         #### Final Traveltime Model
         Tm = Model(inputs=inputs, outputs=T, name=f"Model_{T.name.split('/')[0]}")
 
         #### Gradient 'xr'
-        dTr_list = Diff(name='gradients_xr')([T, xr_list])
+        dTr_list = Diff(name=naming('gradients_xr'))([T, xr_list])
         self._dTr_list = dTr_list
-        dTr = L.Concatenate(axis=-1, name='Gradient_xr')(dTr_list)
+        dTr = L.Concatenate(axis=-1, name=naming('Gradient_xr'))(dTr_list)
         Gr = Model(inputs=inputs, outputs=dTr, name=f"Model_{dTr.name.split('/')[0]}")
 
         #### Eikonal 'xr'
-        vr = L.Input(shape=(1,), name='vr') # velocity input for 'xr'
+        vr = L.Input(shape=(1,), name=naming('vr')) # velocity input for 'xr'
         Er = self.equation(dTr_list, vr)
-        Emr = Model(inputs=inputs + [vr], outputs=Er, name=f"Model_{Er.name.split('/')[0]}")
+        Emr = Model(inputs=inputs + [vr], outputs=Er, name=f"Model_{naming(Er.name.split('/')[0])}_xr")
 
         #### Gradient 'xs'
-        dTs_list = Diff(name='gradients_xs')([T, xs_list])
+        dTs_list = Diff(name=naming('gradients_xs'))([T, xs_list])
         self._dTs_list = dTs_list
-        dTs = L.Concatenate(axis=-1, name='Gradient_xs')(dTs_list)
+        dTs = L.Concatenate(axis=-1, name=naming('Gradient_xs'))(dTs_list)
         Gs = Model(inputs=inputs, outputs=dTs, name=f"Model_{dTs.name.split('/')[0]}")
 
         #### Eikonal 'xs'
-        vs = L.Input(shape=(1,), name='vs') # velocity input for 'xs'
+        vs = L.Input(shape=(1,), name=naming('vs')) # velocity input for 'xs'
         Es = self.equation(dTs_list, vs)
-        Ems = Model(inputs=inputs + [vs], outputs=Es, name=f"Model_{Es.name.split('/')[0]}")
+        Ems = Model(inputs=inputs + [vs], outputs=Es, name=f"Model_{naming(Es.name.split('/')[0])}_xs")
 
         #### Trainable model ####
         kw_models = dict(T=T, Er=Er, Es=Es)
@@ -642,7 +668,7 @@ class NES_TP:
         model_outputs = [kw_models[kw] for kw in losses]
         model_inputs = inputs + [vr] * ('Er' in losses) + [vs] * ('Es' in losses)
         model_name = ''
-        for si in [out.name.split('/')[0] for out in model_outputs]: model_name += '_' + si 
+        for si in [out.name.split('/')[0] for out in model_outputs]: model_name += '_' + si
         self.model = Model(inputs=model_inputs, outputs=model_outputs, name=f"Model{model_name}")
 
         #### All callable models ####
@@ -929,18 +955,23 @@ class NES_TP:
         assert x.shape[-1] == 2*dim, "Dimensions do not coincide"
         xs = x[..., :dim]
         xr = x[..., dim:]
-        vx = {'vs': xs, 'vr': xr}
         X = {}
         for kwi, inp in zip(model.input_names, model.inputs):
             shape = (-1,) + tuple(inp.shape.as_list()[1:])
-            if 'v' in kwi:
-                X[kwi] = velocity(vx[kwi]).reshape(shape)
+            if 'vs' in kwi:
+                var = velocity(xs)
+            elif 'vr' in kwi:
+                var = velocity(xr)
             elif 'xs' in kwi:
                 i = int(kwi[-1])
-                X[kwi] = xs[..., i].reshape(shape)
+                var = xs[..., i]
             elif 'xr' in kwi:
                 i = int(kwi[-1])
-                X[kwi] = xr[..., i].reshape(shape)
+                var = xr[..., i]
+            else:
+                raise ValueError("Input names error")
+
+            X[kwi] = var.reshape(shape)
         return X
 
     def _predict(self, x, out, **kwargs):
@@ -986,7 +1017,8 @@ class NES_TP:
                 **kwargs : keyword arguments : Arguments for 'tf.keras.models.Model.compile(**kwargs)'
         """
         if optimizer is None:
-            optimizer = tf.optimizers.Adam(learning_rate=lr, weight_decay=decay)
+            opt_kwargs = {compat_decay: decay}
+            optimizer = Adam_opt(learning_rate=lr, **opt_kwargs)
 
         self.model.compile(optimizer=optimizer, loss=loss, **kwargs)
         self.compiled = True
@@ -1061,6 +1093,7 @@ class NES_TP:
         config = self.config
         config['velocity'] = self.velocity
         config['equation.config'] = self.equation.get_config()
+        config['name'] = self.name
 
         # makedir
         if pathlib.Path(filepath).is_dir():
@@ -1117,7 +1150,8 @@ class NES_TP:
         # TODO anisotropy
         eikonal = IsoEikonal.from_config(config.pop('equation.config'))
         NES_TP_instance = NES_TP(velocity=config.pop('velocity'), 
-                                 eikonal=eikonal)
+                                 eikonal=eikonal,
+                                 name=config.pop('name'))
         NES_TP_instance.losses = config.pop('losses')
         NES_TP_instance.build_model(**config)
         
@@ -1161,7 +1195,7 @@ class NES_TP:
         if eikonal is None:
             eikonal = self.equation
 
-        NES_TP_instance = NES_TP(velocity=velocity, eikonal=eikonal)
+        NES_TP_instance = NES_TP(velocity=velocity, eikonal=eikonal, name=f"{self.name}_copy")
         NES_TP_instance.build_model(**self.config)
         NES_TP_instance.outs['T'].set_weights(self.outs['T'].get_weights())
         NES_TP_instance._unpack_opt_config(NES_TP._pack_opt_config(self.model))
