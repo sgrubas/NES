@@ -294,18 +294,17 @@ class BestWeights(tf.keras.callbacks.Callback):
     """Keeps only the best weights of the model.
 
     Args:
-        nn_model: neural network model which weights will be watched
         monitor: Quantity to be monitored ('loss' or 'val_loss'). By default, 'loss'
+        start_monitor: below which 'monitor' value callback starts watching 'monitor' and saves best weights
         freq: how often save weights
         verbose: verbosity mode (0 or 1).
-        conversion: conversion function from "loss" to "RMAE"
     """
 
     def __init__(self,
                  monitor='loss',
-                 freq=50,
+                 start_monitor=1e-2,
+                 freq=1,
                  verbose=1,
-                 conversion=lambda x: x * 10**(-0.16),
                  ):
         super(BestWeights, self).__init__()
         assert monitor == 'loss' or monitor == 'val_loss', \
@@ -314,16 +313,14 @@ class BestWeights(tf.keras.callbacks.Callback):
         self.monitor = monitor
         self.verbose = verbose
         self.freq = freq
+        self.start_monitor = start_monitor
         self.best_monitor = np.inf
-        self.best_rmae = np.inf
         self.best_epoch = None
         self.best_weights = None
-        self.conversion = conversion
 
     def on_train_begin(self, logs=None):
         # Allow instances to be re-used
         self.best_monitor = np.inf
-        self.best_rmae = np.inf
         self.best_epoch = None
         self.best_weights = None
 
@@ -331,9 +328,9 @@ class BestWeights(tf.keras.callbacks.Callback):
         current = self.get_monitor_value(logs)
         if current is None:
             return
-        if (epoch > 0) and (epoch % self.freq == 0) and (current < self.best_monitor):
+        if (epoch > 0) and (epoch % self.freq == 0) and \
+           (current < self.best_monitor) and (current < self.start_monitor):
             self.best_monitor = current
-            self.best_rmae = self.conversion(current)
             self.best_epoch = epoch
             self.best_weights = self.model.get_weights()
 
