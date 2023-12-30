@@ -340,7 +340,8 @@ class BestWeights(tf.keras.callbacks.Callback):
                 print(f'RMAE ~ {100 * self.best_rmae:.5f} %\n')
 
     def on_train_end(self, logs=None):
-        self.model.set_weights(self.best_weights)
+        if self.best_weights is not None:
+            self.model.set_weights(self.best_weights)
         if self.verbose:
             print("Set the best weights for the model\n")
 
