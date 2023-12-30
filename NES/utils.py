@@ -290,11 +290,11 @@ class NES_EarlyStopping(tf.keras.callbacks.Callback):
         return monitor_value
 
 
-class NES_BestWeights(tf.keras.callbacks.Callback):
+class BestWeights(tf.keras.callbacks.Callback):
     """Keeps only the best weights of the model.
 
     Args:
-        NES: NES instance
+        nn_model: neural network model which weights will be watched
         monitor: Quantity to be monitored ('loss' or 'val_loss'). By default, 'loss'
         freq: how often save weights
         verbose: verbosity mode (0 or 1).
@@ -302,22 +302,23 @@ class NES_BestWeights(tf.keras.callbacks.Callback):
     """
 
     def __init__(self,
-                 NES,
+                 nn_model,
                  monitor='loss',
                  freq=50,
                  verbose=1,
                  conversion=lambda x: x * 10**(-0.16),
 
                  ):
-        super(NES_BestWeights, self).__init__()
+        super(BestWeights, self).__init__()
         assert monitor == 'loss' or monitor == 'val_loss', \
             "Only 'loss' and 'val_loss' are supported for monitor metric"
 
-        self.model = NES
+        self.model = nn_model
         self.monitor = monitor
         self.verbose = verbose
         self.freq = freq
         self.best_monitor = np.inf
+        self.best_rmae = np.inf
         self.best_epoch = None
         self.best_weights = None
         self.conversion = conversion
