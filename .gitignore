@@ -9,9 +9,7 @@ bin-release/
 /NES/__pycache__/
 NES.egg-info/
 /notebooks/.ipynb_checkpoints
-/notebooks/Models
-/notebooks/testing.ipynb
-/notebooks/testing3D.ipynb
+/tests
 
 # Executables
 *.swf
@@ -23,3 +21,4 @@ NES.egg-info/
 # Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
 # should NOT be excluded as they contain compiler settings and other important
 # information for Eclipse / Flash Builder.
+/NES/localization/

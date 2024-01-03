@@ -451,7 +451,7 @@ class NES_OP:
         NES_OP_instance = NES_OP(xs=config.pop('xs'), 
                                  velocity=config.pop('velocity'), 
                                  eikonal=eikonal,
-                                 name=config.pop('name'))
+                                 name=config.pop('name', None))
         NES_OP_instance.build_model(**config)
 
         # Loading weights
@@ -658,7 +658,7 @@ class NES_TP:
         Gs = Model(inputs=inputs, outputs=dTs, name=f"Model_{dTs.name.split('/')[0]}")
 
         #### Eikonal 'xs'
-        vs = L.Input(shape=(1,), name=naming('vs')) # velocity input for 'xs'
+        vs = L.Input(shape=(1,), name=naming('vs'))  # velocity input for 'xs'
         Es = self.equation(dTs_list, vs)
         Ems = Model(inputs=inputs + [vs], outputs=Es, name=f"Model_{naming(Es.name.split('/')[0])}_xs")
 
@@ -668,8 +668,11 @@ class NES_TP:
         model_outputs = [kw_models[kw] for kw in losses]
         model_inputs = inputs + [vr] * ('Er' in losses) + [vs] * ('Es' in losses)
         model_name = ''
-        for si in [out.name.split('/')[0] for out in model_outputs]: model_name += '_' + si
+        for si in [out.name.split('/')[0] for out in model_outputs]:
+            model_name += '_' + si
         self.model = Model(inputs=model_inputs, outputs=model_outputs, name=f"Model{model_name}")
+
+        self.output_layers = dict(T=T, Er=Er, Es=Es, Gr=dTr, Gs=dTs)
 
         #### All callable models ####
         self.outs = dict(T=Tm, Er=Emr, Es=Ems, Gr=Gr, Gs=Gs)
@@ -1151,7 +1154,7 @@ class NES_TP:
         eikonal = IsoEikonal.from_config(config.pop('equation.config'))
         NES_TP_instance = NES_TP(velocity=config.pop('velocity'), 
                                  eikonal=eikonal,
-                                 name=config.pop('name'))
+                                 name=config.pop('name', None))
         NES_TP_instance.losses = config.pop('losses')
         NES_TP_instance.build_model(**config)
         
