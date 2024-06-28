@@ -56,7 +56,7 @@ Isochrones of solutions. RMAE is shown above each figure. The NES solutions are 
 <img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_Layered_0.33.png" alt="0.33%" width="400"/> <img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_LayeredBoxGauss_0.34.png" alt="0.34%" width="400"/>
 
 # Citation
-If you find NES useful for your research, please cite our paper:
+If you find NES useful for your research, please cite our paper and this repo:
 ```
 @article{grubas2023NES,
 title = {Neural Eikonal solver: Improving accuracy of physics-informed neural networks for solving eikonal equation in case of caustics},
@@ -69,6 +69,15 @@ doi = {https://doi.org/10.1016/j.jcp.2022.111789},
 url = {https://www.sciencedirect.com/science/article/pii/S002199912200852X},
 author = {Serafim Grubas and Anton Duchkov and Georgy Loginov},
 keywords = {Physics-informed neural network, Eikonal equation, Seismic, Traveltimes, Caustics}
+}
+
+@article{grubas2023NESpython,
+title = {Neural Eikonal Solver},
+journal = {GitHub},
+url = {https://github.com/sgrubas/NES},
+doi = {10.5281/zenodo.12588346},
+year = {2023},
+author = {Serafim Grubas and Anton Duchkov and Georgy Loginov}
 }
 ```
 
