@@ -1,12 +1,10 @@
 import tensorflow as tf
 import numpy as np
-from scipy.interpolate import RegularGridInterpolator
 import tensorflow.keras.layers as L
-from tensorflow.keras.models import Model
 from tensorflow.keras import initializers
 from tensorflow.python.platform import tf_logging as logging
-from sklearn.cluster import KMeans
 from . import experimental
+from . import velocity
 
 
 #######################################################################
@@ -32,6 +30,7 @@ ACTS = {
         'gauslace' : lambda z: tf.math.exp(-z**2) + tf.math.exp(-tf.abs(z)),
         }
 
+
 class AdaptiveActivation(L.Layer):
     """ Layer for activation function.
     """
@@ -49,9 +48,9 @@ class AdaptiveActivation(L.Layer):
         self.n = float(parts[-1]) if parts[-1].isdigit() else 1.0
         if self.adapt:
             self.a = self.add_weight(name='a', 
-                                    shape=(1,),
-                                    initializer='ones',
-                                    trainable=True)        
+                                     shape=(1,),
+                                     initializer='ones',
+                                     trainable=True)
 
     def call(self, X):
         if self.adapt:
@@ -62,8 +61,8 @@ class AdaptiveActivation(L.Layer):
     def get_config(self):
         config = super(AdaptiveActivation, self).get_config()
         config.update({"n": self.n, 
-                        "adapt" : self.adapt, 
-                        "act" : self.act, })
+                       "adapt": self.adapt,
+                       "act": self.act})
         return config
 
 
@@ -99,7 +98,7 @@ def Activation(act):
 #######################################################################
 
 
-def DenseBody(inputs, nu, nl, out_dim=1, act='ad-gauss-1', out_act='linear', **kwargs):
+def DenseBody(inputs, nu, nl, out_dim=1, act='ad-gauss-1', out_act='linear', improved_mlp=False, **kwargs):
     """
         API function that construct the block of fully connected layers.
 
@@ -118,13 +117,21 @@ def DenseBody(inputs, nu, nl, out_dim=1, act='ad-gauss-1', out_act='linear', **k
     kwargs.setdefault('kernel_initializer', 'he_normal')
     
     if isinstance(nu, int):
-        nu = [nu]*nl
+        nu = [nu] * nl
     assert isinstance(nu, (list, tuple, np.ndarray)) and len(nu) == nl, \
-    "Number hidden layers 'nl' must be equal to 'len(nu)'"
+                        "Number of hidden layers 'nl' must be equal to 'len(nu)'"
+
+    UV_transform = L.Lambda(lambda x: (1.0 - x[0]) * x[1] + x[0] * x[2])
+
+    if improved_mlp:
+        U = L.Dense(nu[0], activation=Activation(act), **kwargs)(inputs)
+        V = L.Dense(nu[0], activation=Activation(act), **kwargs)(inputs)
 
     x = L.Dense(nu[0], activation=Activation(act), **kwargs)(inputs)
     for i in range(1, nl):
         x = L.Dense(nu[i], activation=Activation(act), **kwargs)(x)
+        if improved_mlp:
+            x = UV_transform([x, U, V])
 
     out = L.Dense(out_dim, activation=Activation(out_act), **kwargs)(x)
     return out
@@ -337,7 +344,6 @@ class BestWeights(tf.keras.callbacks.Callback):
             if self.verbose:
                 print('Epoch %05d: saving best weights' % (epoch + 1))
                 print(f'{self.monitor}: {self.best_monitor:.5f}')
-                print(f'RMAE ~ {100 * self.best_rmae:.5f} %\n')
 
     def on_train_end(self, logs=None):
         if self.best_weights is not None:
@@ -431,18 +437,22 @@ class Uniform_PDF:
     """
         API for generating uniform distribution in a domain limits
     """
-    limits = None 
+    limits = None
+
     def __init__(self, *args):
         """
             args: 
-                - instance of NES.utils.Interpolator
+                - instance of NES.velocity.BaseVelocity
                 - (xmin, xmax) 
         """
         if len(args) == 1:
+            assert isinstance(args[0], velocity.BaseVelocity)
             xmins, xmaxs = getattr(args[0], 'xmin'), getattr(args[0], 'xmax')
         elif len(args) == 2:
             assert len(args[0]) == len(args[1])
             xmins, xmaxs = args
+        else:
+            raise ValueError("Arguments must be either limits or instance `NES.velocity.BaseVelocity`")
         self.limits = np.array([xmins, xmaxs])
 
     def __call__(self, num_points, rep=1):
