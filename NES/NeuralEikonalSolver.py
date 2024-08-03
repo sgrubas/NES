@@ -1,7 +1,7 @@
 import tensorflow as tf
 import numpy as np
 import tensorflow.keras.layers as L
-from tensorflow.keras.layers.experimental.preprocessing import Rescaling
+# from tensorflow.keras.layers.experimental.preprocessing import Rescaling
 from tensorflow.keras.models import Model
 from .utils import Uniform_PDF, RegularGrid, DenseBody, Diff, SourceLoc, NES_EarlyStopping, data_handler, Activation
 from .eikonalLayers import IsoEikonal
@@ -71,7 +71,7 @@ class NES_OP:
 
 
     def build_model(self, nl=4, nu=50, act='ad-gauss-1', out_act='ad-sigmoid-1', 
-                    input_scale=True, factored=True, out_vscale=True, **kwargs):       
+                    input_scale=True, factored=True, out_vscale=True, improved_mlp=False, **kwargs):
         """
             Build a neural-network model using Tensorflow.
 
@@ -87,6 +87,7 @@ class NES_OP:
                 factored : boolean : Conventional factorization 'tau = R * out_act'. By default 'factored=True'
                 out_vscale : boolean : Improved factorization 'tau = R * (1/vmin - 1/vmax) * out_act + 1/vmax'. 
                                        If 'True', the 'out_act' must be bounded in [0, 1]. By default 'out_vscale=True'
+                improved_mlp : boolean : whether to apply an Improved MLP structure (https://doi.org/10.1137/20M1318043)
                 **kwargs : keyword arguments : Arguments for tf.keras.layers.Dense(**kwargs) such as 'kernel_initializer'.
                             If "kwargs.get('kernel_initializer')" is None then "kwargs['kernel_initializer'] = 'he_normal' "
 
@@ -104,6 +105,7 @@ class NES_OP:
         self.config['input_scale'] = input_scale
         self.config['factored'] = factored
         self.config['out_vscale'] = out_vscale
+        self.config['improved_mlp'] = improved_mlp
         self.config['losses'] = losses
         for kw, v in kwargs.items():
             self.config[kw] = v
@@ -121,12 +123,12 @@ class NES_OP:
 
         #### Input scaling
         if input_scale:
-            x_sc = Rescaling(1 / self.xscale, name=naming('input_scaling'))(x)
+            x_sc = L.Rescaling(1 / self.xscale, name=naming('input_scaling'))(x)
         else:
             x_sc = x
         
         #### Trainable body with Traveltime Output
-        T = DenseBody(x_sc, nu, nl, out_dim=1, act=act, out_act=out_act, **kwargs)
+        T = DenseBody(x_sc, nu, nl, out_dim=1, act=act, out_act=out_act, improved_mlp=improved_mlp, **kwargs)
 
         #### Factorized solution
         if out_vscale:
@@ -549,7 +551,8 @@ class NES_TP:
         self.config = {}        # config data of NN model to be reproducible
         
     def build_model(self, nl=4, nu=50, act='ad-gauss-1', out_act='ad-sigmoid-1', 
-                    factored=True, out_vscale=True, input_scale=True, reciprocity=True, **kwargs):
+                    factored=True, out_vscale=True, input_scale=True, reciprocity=True,
+                    improved_mlp=False, **kwargs):
         """
             Build a neural-network model using Tensorflow.
 
@@ -567,6 +570,7 @@ class NES_TP:
                                        If 'True', the 'out_act' must be bounded in [0, 1]. By default 'out_vscale=True'
                 reciprocity : boolean : Enhanced factorization for NES_TP incorporating the reciprocity principle tau(xs, xr) = tau(xr, xs).
                                         By default 'True'
+                improved_mlp : boolean : whether to apply an Improved MLP structure (https://doi.org/10.1137/20M1318043)
                 **kwargs : keyword arguments : Arguments for tf.keras.layers.Dense(**kwargs) such as 'kernel_initializer'.
                             If "kwargs.get('kernel_initializer')" is None then "kwargs['kernel_initializer'] = 'he_normal' "
 
@@ -588,6 +592,7 @@ class NES_TP:
         self.config['factored'] = factored
         self.config['out_vscale'] = out_vscale
         self.config['reciprocity'] = reciprocity
+        self.config['improved_mlp'] = improved_mlp
         self.config['losses'] = losses
         for kw, v in kwargs.items():
             self.config[kw] = v
@@ -610,12 +615,12 @@ class NES_TP:
         #### Input scaling
         X = L.Concatenate(name=naming('x'), axis=-1)([xs, xr])
         if input_scale:
-            X_sc = Rescaling(1 / self.xscale, name=naming('X_scaling'))(X)
+            X_sc = L.Rescaling(1 / self.xscale, name=naming('X_scaling'))(X)
         else:
             X_sc = X
 
         #### Trainable body
-        T = DenseBody(X_sc, nu, nl, out_dim=1, act=act, out_act='linear', **kwargs)
+        T = DenseBody(X_sc, nu, nl, out_dim=1, act=act, out_act='linear', improved_mlp=improved_mlp, **kwargs)
 
         #### Reciprocity 
         if reciprocity: # T(xs,xr)=T(xr,xs)
