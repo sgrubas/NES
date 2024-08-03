@@ -455,7 +455,8 @@ class GradientBased_PDF:
     """
         API for generating gradient based distribution in a given velocity model
     """
-    limits = None 
+    limits = None
+
     def __init__(self, velocity):
         """velocity: velocity class
         """
