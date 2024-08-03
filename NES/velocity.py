@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.ndimage import gaussian_filter
-import pkg_resources
-# from .utils import Interpolator
+# import pkg_resources
+import importlib_resources
 from scipy.interpolate import RegularGridInterpolator
 
 
@@ -138,6 +138,7 @@ class Interpolator(BaseVelocity):
             self.LFunc = RegularGridInterpolator(self.axes, L, **interp_kw)
 
         return self.LFunc(X)
+
 
 class VerticalGradient(BaseVelocity):
     """
@@ -289,8 +290,11 @@ def Marmousi(smooth=None, section=None):
         Return:
             Vel : instance of 'NES.Interpolator' for Marmousi model in 'km/s' units
     """
-    f = pkg_resources.resource_stream(__name__, "data//Marmousi_Pwave_smooth_12_5m.npy")
-    V = np.load(f) / 1000.0
+    # f = pkg_resources.resource_stream(__name__, "data//Marmousi_Pwave_smooth_12_5m.npy")
+    ref = importlib_resources.files(__name__).joinpath('data//Marmousi_Pwave_smooth_12_5m.npy')
+    with ref.open('rb') as fp:
+        V = np.load(fp) / 1000.0
+
     if section is not None:
         i = [0, V.shape[0]+1] if section[0] is None else section[0]
         j = [0, V.shape[1]+1] if section[1] is None else section[1]
@@ -305,6 +309,7 @@ def Marmousi(smooth=None, section=None):
     z = np.linspace(zmin, zmax, nz)
     Vel = Interpolator(V, x, z)
     return Vel
+
 
 def MarmousiSmoothedPart():
     """
