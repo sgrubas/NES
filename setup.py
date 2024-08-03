@@ -1,28 +1,30 @@
 from setuptools import setup, find_packages
 from NES import __version__
 
-NAME            = "NES"
-VERSION         = __version__
-DESCRIPTION     = "Neural Eikonal Solver: Framework for solving the eikonal equation using neural networks"
-URL             = "https://github.com/sgrubas/NES"
-LICENSE         = "MIT"
-AUTHOR          = "Serafim Grubas, Nikolay Shilov, Anton Duchkov, Georgy Loginov"
-EMAIL           = "serafimgrubas@gmail.com"
-KEYWORDS        = ["Eikonal", "Seismic", "Traveltime"]
-CLASSIFIERS     = [
-                    "Development Status :: Beta",
-                    "Intended Audience :: Geophysicist",
-                    "Natural Language :: English",
-                    f"License :: {LICENSE}",
-                    "Operating System :: OS Independent",
-                    "Programming Language :: Python :: 3.7",
-                    "Topic :: Scientific/Engineering",
-                    ]
+NAME = "NES"
+VERSION = __version__
+DESCRIPTION = "Neural Eikonal Solver: Framework for solving the eikonal equation using neural networks"
+URL = "https://github.com/sgrubas/NES"
+LICENSE = "MIT"
+AUTHOR = "Serafim Grubas, Anton Duchkov, Georgy Loginov, Nikolay Shilov"
+EMAIL = "serafimgrubas@gmail.com"
+KEYWORDS = ["Eikonal", "Seismic", "Traveltime"]
+CLASSIFIERS = [
+               "Development Status :: Beta",
+               "Intended Audience :: Geophysicist",
+               "Natural Language :: English",
+               f"License :: {LICENSE}",
+               "Operating System :: OS Independent",
+               "Programming Language :: Python :: 3.7",
+               "Topic :: Scientific/Engineering",
+               ]
 INSTALL_REQUIRES = [
                     'numpy',
                     'scipy',
                     'scikit-learn',
-                    'tensorflow']
+                    'tensorflow',
+                    'setuptools']
+
 with open("README.md", "r") as f:
     LONG_DESCRIPTION = f.read()
 
