@@ -18,12 +18,9 @@ CLASSIFIERS = [
                "Programming Language :: Python :: 3.7",
                "Topic :: Scientific/Engineering",
                ]
-INSTALL_REQUIRES = [
-                    'numpy',
-                    'scipy',
-                    'scikit-learn',
-                    'tensorflow',
-                    'setuptools']
+
+with open("requirements.txt", mode='r') as f:
+    INSTALL_REQUIRES = list(map(lambda x: x.replace('\n', ''), f.readlines()))
 
 with open("README.md", "r") as f:
     LONG_DESCRIPTION = f.read()
