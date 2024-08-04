@@ -1,6 +1,6 @@
-from tensorflow import norm, pow, reduce_sum, ones_like, concat
+from tensorflow import norm, pow, ones_like, concat
 from tensorflow.keras.layers import Layer
-from tensorflow.math import log
+
 
 class IsoEikonal(Layer):
     """
