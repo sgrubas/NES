@@ -59,7 +59,7 @@ class NES_OP:
         else:
             assert isinstance(eikonal, L.Layer), "Eikonal should be an instance of keras Layer"
             self.equation = eikonal
-            self.equation.name = f'{self.name}_{self.equation.name}'
+            self.equation._name = f'{self.name}_{self.equation.name}'
 
         self.sing_eps = 1e-5  # tolerance for source singularity (to remove from training)
         self.x_train = None  # input training data
@@ -540,7 +540,7 @@ class NES_TP:
         else:
             assert isinstance(eikonal, L.Layer), "Eikonal should be an instance of keras Layer"
             self.equation = eikonal
-            self.equation.name = f'{self.name}_{self.equation.name}'
+            self.equation._name = f'{self.name}_{self.equation.name}'
 
         self.sing_eps = 1e-5  # tolerance for source singularity (to remove from training)
         self.x_train = None  # input training data

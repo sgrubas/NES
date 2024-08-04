@@ -370,8 +370,7 @@ def data_handler(x, y, **kwargs):
     callbacks = kwargs.get('callbacks', [])
     generator_required = False
     for c in callbacks:
-        if isinstance(c, (experimental.ImportanceSampling, experimental.ImportanceWeighting, 
-                          experimental.RARsampling, experimental.FromCoarseToFineResampling)):
+        if isinstance(c, (experimental.RARsampling, experimental.FromCoarseToFineResampling)):
             generator_required = True
             break
 
