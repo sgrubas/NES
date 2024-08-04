@@ -213,7 +213,7 @@ class NES_OP:
             Returns:
                 V : numpy array (N,) of floats : Predicted velocity from the source 'NES_OP.xs' at 'xr'
         """
-        G = self.Gradient(x=x, **kwargs)
+        G = self.Gradient(x=xr, **kwargs)
         return 1 / np.linalg.norm(G, axis=-1)
 
     def Laplacian(self, xr, **kwargs):
@@ -258,7 +258,7 @@ class NES_OP:
             for i, dTri in enumerate(self._dT_list):
                 H_list += Diff(name=f'd2T{i}')([dTri, self.xr_list[i:]])
             H = L.Concatenate(axis=-1, name='Hessians')(H_list)
-            self.outs[kw] = Model(inputs=xr_list, outputs=H, name=f"Model_{H.name.split('/')[0]}")
+            self.outs[kw] = Model(inputs=self.xr_list, outputs=H, name=f"Model_{H.name.split('/')[0]}")
 
         return self._predict(xr, kw, **kwargs)
 
@@ -623,9 +623,9 @@ class NES_TP:
         #### Reciprocity
         if reciprocity:  # T(xs,xr)=T(xr,xs)
             t = Model(inputs=inputs, outputs=T, name=naming('Model_No_Reciprocity'))
-            xsr = xs_list + xr_list;
-            xrs = xr_list + xs_list;
-            tsr = t(xsr);
+            xsr = xs_list + xr_list
+            xrs = xr_list + xs_list
+            tsr = t(xsr)
             trs = t(xrs)
             T = L.Lambda(lambda x: 0.5 * (x[0] + x[1]), name=naming('Reciprocity'))([tsr, trs])
 
