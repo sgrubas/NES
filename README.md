@@ -30,9 +30,13 @@ For detailed comparisons see our colab notebooks [EikoNet](https://github.com/sg
 ```python
 pip install git+https://github.com/sgrubas/NES.git
 ```
+NES is built on [Keras 3](https://keras.io/keras_3/) and runs on the **JAX**, **TensorFlow** or **PyTorch** backend (install at least one; Google Colab has all three).
+Select the backend before importing NES, e.g. `os.environ["KERAS_BACKEND"] = "jax"` (default is `"tensorflow"`).
 
 # Quick example
 ```python
+import os
+os.environ["KERAS_BACKEND"] = "jax"  # or "tensorflow", "torch"
 import NES
 
 Vel = NES.velocity.MarmousiSmoothedPart()
@@ -45,6 +49,15 @@ Xs = grid((5, 5)); Xr = grid((100, 100))
 X = grid.sou_rec_pairs(Xs, Xr)
 T = Eik.Traveltime(X)
 ```
+
+## Version 0.3 (Keras 3)
+* Same API as 0.2 (`NES_OP`, `NES_TP`, `build_model`, `train`, `Traveltime`, `GradientR`, ...). Models saved by 0.2 (TensorFlow/Keras 2) load with `NES_TP.load` / `NES_OP.load`.
+* `reciprocity` of `NES_TP.build_model` can be `'output'` (default, as in the paper: network outputs averaged over the source-receiver swap), `'first_layer'` (first hidden layer averaged over the swap, the rest evaluated once) or `'invariant'` (single pass on swap-invariant features). The last two train 1.7-2.4x faster per epoch; for the same number of epochs `'output'` was the most accurate on the Luneburg lens. Compare them on your model with `benchmarks/reciprocity.py` or let `NES.hpo` choose.
+* `NES_TP.predict(x, ('T', 'Gs'))` returns several outputs from one pass.
+* Custom eikonal layers receive the gradient as one tensor `(N, dim)` instead of a list of `(N, 1)` tensors.
+* Analytic test models with closed-form two-point traveltimes: `NES.velocity.LuneburgLens` (local lens, low or high velocity) and `NES.velocity.MaxwellFishEye` (low-velocity fish-eye with a focal point, or its high-velocity hyperbolic twin).
+* Hyperparameter search for any velocity model: `NES.hpo` (Optuna >= 5, two objectives: loss and FLOPs, median stopping rule, PED-ANOVA importance). Tutorial: `notebooks/NES_HPO_Optuna.ipynb`.
+* Tests: `KERAS_BACKEND=jax pytest tests`.
 
 # 2D examples of NES-OP
 Isochrones of solutions. RMAE is shown above each figure. The NES solutions are *white dashed isochrones*, the reference solutions are *black isochrones*. 
