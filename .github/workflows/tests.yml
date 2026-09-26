@@ -1,0 +1,31 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [jax, tensorflow, torch]
+    env:
+      KERAS_BACKEND: ${{ matrix.backend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend
+        run: |
+          case "$KERAS_BACKEND" in
+            jax) pip install "jax[cpu]" ;;
+            tensorflow) pip install tensorflow-cpu ;;
+            torch) pip install torch --index-url https://download.pytorch.org/whl/cpu ;;
+          esac
+      - name: Install NES
+        run: pip install -e ".[test,hpo]" eikonalfm
+      - name: Test
+        run: pytest tests -q
