@@ -8,8 +8,10 @@ A. Derivatives: accuracy of T, grad T, lap T and hess T of NES (autodiff) agains
        FMM: grids 41^2 ... 961^2 (problems.FMM_SIZES), 2nd-order central differences.
 B. Collocation sampling on the caustic models and one smooth control: Fermat squared deficit, Levenberg-Marquardt
    90 s, collocation set replaced every 40 iterations by: none (fixed), uniform, rad, rad-curv, dwr (hard_nes.Resampler).
+C. The same, with gradual sets (1 % of the points get a Metropolis-Hastings move every iteration: uniform-g, rad-g,
+   rad-curv-g) and rad-curv with the set frozen for the last quarter of the budget (rad-curv-f).
 
-    KERAS_BACKEND=jax python prototypes/run_round3.py --out <results dir> [--parts A B]
+    KERAS_BACKEND=jax python prototypes/run_round3.py --out <results dir> [--parts B C A] [--skip-done]
 
 Writes deriv_fmm_<model>.json, <model>__deriv-<factor>-<nl>x<nu>.json, <model>__samp-<kind>-s<seed>.json (+ .png for
 B), progress.json, and prints EVENT lines.
@@ -35,20 +37,27 @@ DERIV_MODELS = ['HyperbolicLens', 'VerticalGradient']
 DERIV_FACTORS = ['nes', 'fermat-exp']
 SAMP_MODELS = [('GaussLow', 2), ('TwoGaussLow', 2), ('GaussHigh', 1)]
 SAMPLERS = ['none', 'uniform', 'rad', 'rad-curv', 'dwr']
+GRADUAL = ['uniform-g', 'rad-g', 'rad-curv-g', 'rad-curv-f']
 SAMP_LABEL = {'none': 'fixed collocation points', 'uniform': 'fresh uniform points', 'rad': 'residual-adaptive',
-              'rad-curv': 'residual-adaptive, caustics masked', 'dwr': 'ray-weighted residual'}
+              'rad-curv': 'residual-adaptive, caustics masked', 'dwr': 'ray-weighted residual',
+              'uniform-g': 'gradual uniform turnover', 'rad-g': 'gradual residual-adaptive',
+              'rad-curv-g': 'gradual residual-adaptive, caustics masked',
+              'rad-curv-f': 'residual-adaptive, caustics masked, frozen for the last quarter'}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True)
-    ap.add_argument('--parts', nargs='*', default=['A', 'B'])
+    ap.add_argument('--parts', nargs='*', default=['B', 'C', 'A'])
+    ap.add_argument('--skip-done', action='store_true', help='skip runs whose result file says done')
     ap.add_argument('--event-every', type=int, default=5)
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     plan = []
     if 'B' in args.parts:
         plan += [('B', m, dict(kind=k, seed=s)) for m, ns in SAMP_MODELS for s in range(ns) for k in SAMPLERS]
+    if 'C' in args.parts:
+        plan += [('B', m, dict(kind=k, seed=s)) for m, ns in SAMP_MODELS for s in range(ns) for k in GRADUAL]
     if 'A' in args.parts:
         plan += [('A', m, dict(factor=f, nl=nl, nu=nu)) for m in DERIV_MODELS for f in DERIV_FACTORS for nl, nu in SIZES]
     total, done, t_start = len(plan), 0, time.time()
@@ -78,18 +87,32 @@ def main():
                                order=list(P.MODELS).index(name), rows=P.fmm_benchmark(name)), f)
         return probs[name, n_train]
 
+    def rid_of(part, name, spec):
+        if part == 'A':
+            return f"{name}__deriv-{spec['factor']}-{spec['nl']}x{spec['nu']}"
+        return f"{name}__samp-{spec['kind']}-s{spec['seed']}"
+
+    def is_done(rid):
+        path = os.path.join(args.out, f'{rid}.json')
+        return os.path.exists(path) and json.load(open(path)).get('status') == 'done'
+
+    if args.skip_done:
+        done = sum(is_done(rid_of(*x)) for x in plan)
+        plan = [x for x in plan if not is_done(rid_of(*x))]
+        total = done + len(plan)
+
     last_part = None
     for part, name, spec in plan:
         if part == 'A':
             cfg = H.Config(spec['factor'], 1, 'lm', init='ridge', nl=spec['nl'], nu=spec['nu'])
             n_params = H.count_params(H.init_params(H.jax.random.PRNGKey(0), cfg, problem(name)))
             prob = problem(name, N_TRAIN(n_params))
-            rid = f"{name}__deriv-{spec['factor']}-{spec['nl']}x{spec['nu']}"
+            rid = rid_of(part, name, spec)
             label = f"{spec['factor']} factor, {spec['nl']}x{spec['nu']}, Levenberg-Marquardt"
         else:
             prob = problem(name)
             cfg = H.Config('fermat-sq', 1, 'lm', init='ridge')
-            rid = f"{name}__samp-{spec['kind']}-s{spec['seed']}"
+            rid = rid_of(part, name, spec)
             label = f"Fermat squared deficit, Levenberg-Marquardt, {SAMP_LABEL[spec['kind']]}, seed {spec['seed']}"
         progress(f'{prob.title}: {label}')
         rec = dict(id=rid, part=part, model=name, model_title=prob.title, caustic=prob.caustic,
@@ -101,9 +124,13 @@ def main():
                 p, curve, cs = H.train(prob, cfg, seed=0, iters=100000, max_seconds=budget)
                 rec.update(budget=budget, deriv=D.nes_derivatives(prob, cfg, p))
             else:
-                sampler = None if spec['kind'] == 'none' else H.Resampler(prob, cfg, spec['kind'], seed=spec['seed'])
+                kind = spec['kind'][:-2] if spec['kind'].endswith('-f') else spec['kind']
+                sampler = None if kind == 'none' else H.Resampler(prob, cfg, kind, seed=spec['seed'])
                 p, curve, cs = H.train(prob, cfg, seed=spec['seed'], iters=100000, max_seconds=90,
-                                       sampler=sampler, resample_every=40)
+                                       sampler=sampler, resample_every=40,
+                                       freeze_after=67.5 if spec['kind'].endswith('-f') else None)
+                if sampler is not None and sampler.gradual:
+                    rec['accepted'] = sampler.accepted
             m = H.Evaluator(prob, cfg).full(p)
             if part == 'B':
                 figure(os.path.join(args.out, f'{rid}.png'), prob, cfg, m, title=label)

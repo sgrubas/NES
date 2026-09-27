@@ -327,14 +327,15 @@ def train_adam(prob, cfg, seed=0, epochs=3000, lr=6e-3, decay=3e-4, n_batches=8,
 
 
 def train_lm(prob, cfg, seed=0, iters=200, lam0=1e-3, log_every=2, callback=None, max_seconds=600, w_eps=1e-3,
-             p0=None, curve0=None, sampler=None, resample_every=40, eig_max=1500):
+             p0=None, curve0=None, sampler=None, resample_every=40, eig_max=1500, freeze_after=None):
     """
         Levenberg-Marquardt for the L1 loss mean |r| by iteratively reweighted least squares: each iteration
         minimizes |W (r + J d)|^2 + lam |d|^2 with W = diag(1 / sqrt(max(|r|, w_eps * mean|r|))), so |W r|^2 = sum |r|.
         The normal matrix (J^T W^2 J, P x P) is eigendecomposed once per iteration, so a new lam costs a matvec;
         above `eig_max` parameters it is Cholesky-factorized for each lam instead (about 25x cheaper per factorization).
         A step is kept when it lowers sum |r|; lam falls by 3 on success and grows 2x, 4x, ... on failure.
-        `sampler(params)` (see Resampler) replaces the collocation set every `resample_every` iterations.
+        `sampler(params)` (see Resampler) replaces the collocation set every `resample_every` iterations; a gradual
+        sampler (kind '*-g') instead swaps a few points every iteration. No resampling after `freeze_after` seconds.
     """
     scaled = cfg.opt == 'lms'
     p = init_params(jax.random.PRNGKey(seed), cfg, prob) if p0 is None else p0
@@ -385,7 +386,10 @@ def train_lm(prob, cfg, seed=0, iters=200, lam0=1e-3, log_every=2, callback=None
     for it in range(1, iters + 1):
         tau, eps = schedule(prob, cfg, it / iters, stop_tau=0.75, stop_eps=0.7)
         ts = time.perf_counter()
-        if sampler is not None and it > 1 and (it - 1) % resample_every == 0:
+        live = sampler is not None and it > 1 and (freeze_after is None or t_train < freeze_after)
+        if live and sampler.gradual:
+            args = sampler.evolve(unravel(flat), args, f / N)
+        elif live and (it - 1) % resample_every == 0:
             d = sampler(unravel(flat))
             args = (d['x'], d['v'], d['TL'], d['gTL'], d['HTL'])
         gv, S2, V, f, col = linearize(flat, args, tau, eps)
@@ -542,12 +546,19 @@ class Resampler:
             'rad-curv' : the same, but points where the smallest hessian eigenvalue times R is below -kappa (caustic
                          smoothing zones: first arrivals are semiconcave, their smooth fits bend down sharply there)
                          keep only the uniform part c
+            '<kind>-g' : gradual version of uniform, rad or rad-curv: every iteration k slots get a uniform candidate,
+                         accepted with probability min(1, w(new) / w(old)) (Metropolis-Hastings with independent
+                         proposals), so the set drifts toward the density w without jumps
             'dwr'      : density ~ |r| A / mean(|r| A) + c, A = number of the network's descent paths (backward rays)
                          through the point: a residual matters for every receiver downstream of it along the rays,
                          and caustic crests have none (dual-weighted residual, the adjoint of the linearized eikonal
                          is transport along rays)
     """
-    def __init__(self, prob, cfg, kind, seed=0, pool=40000, n=None, c=1.0, kappa=5.0, n_acc=81, n_paths=8000):
+    def __init__(self, prob, cfg, kind, seed=0, pool=40000, n=None, c=1.0, kappa=5.0, n_acc=81, n_paths=8000,
+                 k=None):
+        self.gradual = kind.endswith('-g')
+        kind = kind[:-2] if self.gradual else kind
+        assert not (self.gradual and kind == 'dwr'), 'no gradual dwr'
         self.prob, self.kind, self.c, self.kappa, self.n_acc, self.n_paths = prob, kind, c, kappa, n_acc, n_paths
         self.rng = np.random.default_rng(seed + 12345)
         xp = self.rng.uniform(prob.xmin, prob.xmax, size=(pool, 2))
@@ -555,8 +566,12 @@ class Resampler:
         self.pool = prob.features(xp)
         self.xp = xp
         self.n = n or int(prob.train['x'].shape[0])
+        self.k = k or int(np.ceil(0.01 * self.n))
         tt, res = make_model(prob, cfg)
         pl = self.pool
+        self._r_at = jax.jit(jax.vmap(res, in_axes=(None, 0, 0, 0, 0, 0, None, None)))
+        self._h_at = jax.jit(jax.vmap(jax.hessian(tt, argnums=1), in_axes=(None, 0, 0, 0, 0, None)))
+        self._host = None
         self._r = jax.jit(lambda p: jax.vmap(res, in_axes=(None, 0, 0, 0, 0, 0, None, None))(
             p, pl['x'], pl['v'], pl['TL'], pl['gTL'], pl['HTL'], 0.0, 0.0))
         if kind == 'rad-curv':
@@ -591,6 +606,36 @@ class Resampler:
             np.add.at(acc, (idx[:, 0], idx[:, 1]), 1.0)
             alive[alive] = np.linalg.norm(x[alive] - prob.xs, axis=-1) > 2 * ds
         return acc * len(self.xp) / len(x)
+
+    def _weight(self, params, pts, mean_r):
+        """ Target density (unnormalized) at the points pts = (x, v, TL, gTL, HTL) """
+        r = np.abs(np.asarray(self._r_at(params, *pts, 0.0, 0.0)))
+        w = r / max(mean_r, 1e-300) + self.c
+        if self.kind == 'rad-curv':
+            x, v, TL, gTL, HTL = pts
+            lam_min = np.linalg.eigvalsh(np.asarray(self._h_at(params, x, TL, gTL, HTL, 0.0)))[:, 0]
+            R = np.linalg.norm(np.asarray(x) - self.prob.xs, axis=-1)
+            w = np.where(lam_min * R < -self.kappa, self.c, w)
+        return w
+
+    def evolve(self, params, args, mean_r):
+        """ One gradual step: k slots of the collocation set `args` get Metropolis-Hastings moves """
+        if self._host is None or self._host[0].shape[0] != args[0].shape[0]:
+            self._host = [np.array(a) for a in args]
+        h, k = self._host, self.k
+        slots = self.rng.choice(h[0].shape[0], size=k, replace=False)
+        cand = self.rng.integers(len(self.xp), size=k)
+        keys = ('x', 'v', 'TL', 'gTL', 'HTL')
+        new = [np.asarray(self.pool[key])[cand] for key in keys]
+        if self.kind == 'uniform':
+            acc = np.ones(k, bool)
+        else:
+            w = self._weight(params, tuple(jnp.asarray(np.concatenate([a[slots], b])) for a, b in zip(h, new)), mean_r)
+            acc = self.rng.uniform(size=k) * w[:k] < w[k:]
+        for a, b in zip(h, new):
+            a[slots[acc]] = b[acc]
+        self.accepted = getattr(self, 'accepted', 0) + int(acc.sum())
+        return tuple(jnp.asarray(a) for a in h)
 
     def __call__(self, params):
         if self.kind == 'uniform':
