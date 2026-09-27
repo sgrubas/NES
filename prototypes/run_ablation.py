@@ -64,7 +64,7 @@ def downsample(curve, n=80):
                 rmae=[float(curve[i][3]) for i in idx])
 
 
-def figure(path, prob, cfg, m):
+def figure(path, prob, cfg, m, title=None):
     x, z = prob.axes
     T, Tr = m['T'].reshape(prob.X.shape[:2]), prob.T_ref
     err = np.log10(np.maximum(np.abs(m['rel']).reshape(prob.X.shape[:2]), 1e-9))
@@ -83,7 +83,7 @@ def figure(path, prob, cfg, m):
         a.plot(*prob.xs, marker='*', color='red', ms=11, mec='none')
         a.set(aspect='equal', xlim=(x[0], x[-1]), ylim=(z[-1], z[0]), xlabel='x', title=t)
     a1.set_ylabel('z')
-    fig.suptitle(f'{prob.title}: {label(cfg)}', fontsize=9)
+    fig.suptitle(f'{prob.title}: {title or label(cfg)}', fontsize=9)
     fig.savefig(path, dpi=105)
     plt.close(fig)
 

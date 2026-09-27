@@ -10,6 +10,12 @@ Factorization (hard constraints on T):
                T_line = straight-ray traveltime. Fermat's principle gives R/vmax <= T <= T_line exactly, and
                D in [0, 1) keeps T inside. D = O(R^2) near the source, so T = T_line + O(R^3), which is the exact
                local behaviour (ray bending changes traveltime at third order). z -> -inf is the straight ray.
+    'fermat-exp' : the same with q = (R/L)^2 exp(z): a log-deficit, whose relative sensitivity does not vanish
+               where the deficit is small (softplus behaves like exp there, but saturates to linear above)
+    'fermat-sq' : D = u^2 / (1 + u^2) with u = f(d) - f(0). Near the source the time saved by ray bending is
+               T_line - T = R^3 |grad_perp s|^2 / (24 s0) + O(R^4), so D is a smooth positive semidefinite quadratic
+               form in d (rank 1 in 2-D) that vanishes along grad s: u is smooth and vanishes at the source, while
+               log q in the two forms above must go to -inf along grad s.
 
 Output shape (hard constraint on the singularities of T):
     heads = 1 : one smooth branch.
@@ -29,6 +35,10 @@ Optimizers:
              inverse-time learning-rate decay.
     'lm'   : Levenberg-Marquardt for the same L1 loss (iteratively reweighted least squares), full batch,
              full Jacobian; damped steps from the eigendecomposition of the (small) normal matrix.
+    'lms'  : the same with Marquardt scaling (damping lam * diag(J^T J) instead of lam * I).
+    'lbfgsb', 'bfgs' : SciPy L-BFGS-B / BFGS on the L2 loss mean r^2, full batch.
+    'ssbfgs' : self-scaled BFGS (Oren-Luenberger scaling, dense inverse Hessian, strong Wolfe line search) on the
+             L2 loss, as in the PINN studies that reach near machine precision (Urban et al., 2024).
 """
 import time
 import numpy as np
@@ -140,7 +150,7 @@ def init_params(key, cfg, prob):
     first = ridge if cfg.init == 'ridge' else (lambda k, n: dense(k, 2, n))
     ks = jax.random.split(key, cfg.nl + 3)
     head = dense(ks[cfg.nl + 2], cfg.nu, cfg.heads)
-    if cfg.factor == 'fermat':                                   # start close to the straight-ray solution (D ~ 0)
+    if cfg.factor.startswith('fermat'):                          # start close to the straight-ray solution (D ~ 0)
         head = dict(W=0.1 * head['W'], b=jnp.full(cfg.heads, -5.0))
     return dict(h=[first(ks[0], cfg.nu)] + [dense(ks[i], cfg.nu, cfg.nu) for i in range(1, cfg.nl)],
                 u=first(ks[cfg.nl], cfg.nu), v=first(ks[cfg.nl + 1], cfg.nu), head=head,
@@ -178,7 +188,11 @@ def make_model(prob, cfg):
         if cfg.factor == 'nes':
             Tk = R * (smin + (smax - smin) * jax.nn.sigmoid(p['aout'] * z))
         else:
-            q = (R * scale) ** 2 * jax.nn.softplus(z)
+            if cfg.factor == 'fermat-sq':
+                u = z - trunk(p, jnp.zeros_like(d))
+                q = u * u
+            else:
+                q = (R * scale) ** 2 * (jnp.exp(z) if cfg.factor == 'fermat-exp' else jax.nn.softplus(z))
             D = q / (1.0 + q)
             dx = x - jax.lax.stop_gradient(x)                    # zero, but carries the derivatives of T_line:
             tl = TL + jnp.dot(gTL, dx) + 0.25 * LTL * jnp.dot(dx, dx)   # value, gradient and laplacian (2D)
@@ -306,14 +320,16 @@ def train_adam(prob, cfg, seed=0, epochs=3000, lr=6e-3, decay=3e-4, n_batches=8,
     return p, curve, compile_s
 
 
-def train_lm(prob, cfg, seed=0, iters=200, lam0=1e-3, log_every=2, callback=None, max_seconds=600, w_eps=1e-3):
+def train_lm(prob, cfg, seed=0, iters=200, lam0=1e-3, log_every=2, callback=None, max_seconds=600, w_eps=1e-3,
+             p0=None, curve0=None):
     """
         Levenberg-Marquardt for the L1 loss mean |r| by iteratively reweighted least squares: each iteration
         minimizes |W (r + J d)|^2 + lam |d|^2 with W = diag(1 / sqrt(max(|r|, w_eps * mean|r|))), so |W r|^2 = sum |r|.
         The normal matrix (J^T W^2 J, P x P) is eigendecomposed once per iteration, so a new lam costs a matvec.
         A step is kept when it lowers sum |r|; lam falls by 3 on success and grows 2x, 4x, ... on failure.
     """
-    p = init_params(jax.random.PRNGKey(seed), cfg, prob)
+    scaled = cfg.opt == 'lms'
+    p = init_params(jax.random.PRNGKey(seed), cfg, prob) if p0 is None else p0
     flat, unravel = ravel_pytree(p)
     _, res = make_model(prob, cfg)
     data = prob.train
@@ -332,30 +348,34 @@ def train_lm(prob, cfg, seed=0, iters=200, lam0=1e-3, log_every=2, callback=None
         J = _vm(jax.grad(point), 2)(fl, *args, tau, eps)
         w = 1.0 / jnp.sqrt(jnp.maximum(jnp.abs(r), w_eps * jnp.mean(jnp.abs(r))))
         Jw = w[:, None] * J
-        S2, V = jnp.linalg.eigh(Jw.T @ Jw)
-        return V.T @ (Jw.T @ (w * r)), jnp.maximum(S2, 0.0), V, jnp.sum(jnp.abs(r))
+        col = jnp.sqrt(jnp.sum(Jw * Jw, axis=0)) if scaled else jnp.ones(Jw.shape[1])
+        col = jnp.maximum(col, 1e-12 * jnp.max(col))
+        Js = Jw / col                                           # Marquardt scaling: unit columns
+        S2, V = jnp.linalg.eigh(Js.T @ Js)
+        return V.T @ (Js.T @ (w * r)), jnp.maximum(S2, 0.0), V, jnp.sum(jnp.abs(r)), col
 
     @jax.jit
-    def step_of(gv, S2, V, lam):
-        return -V @ (gv / (S2 + lam))
+    def step_of(gv, S2, V, lam, col):
+        return -(V @ (gv / (S2 + lam))) / col
 
     tc = time.perf_counter()
-    gv, S2, V, f = linearize(flat, 1.0, 0.0)
-    jax.block_until_ready(step_of(gv, S2, V, 1.0))
+    gv, S2, V, f, col = linearize(flat, 1.0, 0.0)
+    jax.block_until_ready(step_of(gv, S2, V, 1.0, col))
     jax.block_until_ready(rvec(flat, 1.0, 0.0))
     compile_s = time.perf_counter() - tc
 
     lam = None
-    curve, t_train = [(0, 0.0, float('nan'), ev.rmae(p))], 0.0
+    curve = list(curve0) if curve0 else [(0, 0.0, float('nan'), ev.rmae(p))]
+    t_train, it0 = curve[-1][1], curve[-1][0]
     for it in range(1, iters + 1):
         tau, eps = schedule(prob, cfg, it / iters, stop_tau=0.75, stop_eps=0.7)
         ts = time.perf_counter()
-        gv, S2, V, f = linearize(flat, tau, eps)
+        gv, S2, V, f, col = linearize(flat, tau, eps)
         if lam is None:
             lam = lam0 * float(S2[-1])
         f, accepted, nu = float(f), False, 2.0
         for _ in range(16):
-            new = flat + step_of(gv, S2, V, lam)
+            new = flat + step_of(gv, S2, V, lam, col)
             f_new = float(jnp.sum(jnp.abs(rvec(new, tau, eps))))
             if np.isfinite(f_new) and f_new < f:
                 flat, lam, accepted = new, lam / 3.0, True
@@ -364,7 +384,7 @@ def train_lm(prob, cfg, seed=0, iters=200, lam0=1e-3, log_every=2, callback=None
         jax.block_until_ready(flat)
         t_train += time.perf_counter() - ts
         if it % log_every == 0 or it == iters or not accepted:
-            curve.append((it, t_train, (f_new if accepted else f) / N, ev.rmae(unravel(flat))))
+            curve.append((it0 + it, t_train, (f_new if accepted else f) / N, ev.rmae(unravel(flat))))
             if callback:
                 callback(curve)
         if not accepted or t_train > max_seconds:
@@ -372,5 +392,137 @@ def train_lm(prob, cfg, seed=0, iters=200, lam0=1e-3, log_every=2, callback=None
     return unravel(flat), curve, compile_s
 
 
-def train(prob, cfg, seed=0, **kw):
-    return (train_adam if cfg.opt == 'adam' else train_lm)(prob, cfg, seed=seed, **kw)
+def ssbfgs(fg, x0, callback, max_iters=100000, c2=0.9):
+    """
+        Self-scaled BFGS on the inverse Hessian H: H+ = tau (H - Hy yH / yHy + yHy v v^T) + s s^T / s^T y,
+        v = s / s^T y - Hy / yHy, tau = min(1, s^T y / yHy) (Oren-Luenberger scaling, capped as in Al-Baali),
+        with SciPy's strong Wolfe line search. `callback(x, f)` may raise StopIteration.
+    """
+    from scipy.optimize import line_search
+    cache = {}
+
+    def f_of(z):
+        fz, gz = fg(z)
+        cache.clear()
+        cache[z.tobytes()] = gz
+        return fz
+
+    def g_of(z):
+        key = z.tobytes()
+        return cache[key] if key in cache else fg(z)[1]
+
+    x = np.array(x0, dtype=np.float64)
+    f, g = fg(x)
+    n, H, scaled_once, fails = x.size, np.eye(x.size), False, 0
+    for _ in range(max_iters):
+        d = -H @ g
+        if g @ d >= 0:
+            H, d = np.eye(n), -g
+        alpha, _, _, f_new, _, _ = line_search(f_of, g_of, x, d, gfk=g, old_fval=f, c1=1e-4, c2=c2, maxiter=40)
+        if alpha is None:
+            fails += 1
+            if fails > 2:
+                break
+            H = np.eye(n)
+            continue
+        fails = 0
+        s = alpha * d
+        x_new = x + s
+        g_new = g_of(x_new)
+        y = g_new - g
+        sy = s @ y
+        if not scaled_once and sy > 0:
+            H, scaled_once = (sy / (y @ y)) * np.eye(n), True
+        if sy > 1e-14 * np.linalg.norm(s) * np.linalg.norm(y):
+            Hy = H @ y
+            yHy = y @ Hy
+            tau = min(1.0, sy / yHy)
+            v = s / sy - Hy / yHy
+            H = tau * (H - np.outer(Hy, Hy) / yHy + yHy * np.outer(v, v)) + np.outer(s, s) / sy
+        x, f, g = x_new, f_new, g_new
+        try:
+            callback(x, f)
+        except StopIteration:
+            break
+    return x
+
+
+def train_qn(prob, cfg, seed=0, max_seconds=90, log_every=25, warmup=0, max_iters=200000, callback=None):
+    """
+        Quasi-Newton training on the L2 loss mean r^2 (full batch, float64): 'lbfgsb' and 'bfgs' from SciPy,
+        'ssbfgs' above. `warmup` > 0 runs that many Adam epochs first (the curve then starts with them).
+        Stops after `max_seconds` of optimizer time (logging excluded) or when the method stops.
+    """
+    from scipy.optimize import minimize
+    if warmup:
+        p, curve, compile_s = train_adam(prob, cfg, seed=seed, epochs=warmup, log_every=log_every)
+        curve, t0 = list(curve), curve[-1][1]
+    else:
+        p, curve, compile_s, t0 = init_params(jax.random.PRNGKey(seed), cfg, prob), None, 0.0, 0.0
+    flat0, unravel = ravel_pytree(p)
+    _, res = make_model(prob, cfg)
+    data = prob.train
+    args = (data['x'], data['v'], data['TL'], data['gTL'], data['LTL'])
+    ev = Evaluator(prob, cfg)
+
+    def point(fl, x, v, TL, gTL, LTL, tau, eps):
+        return res(unravel(fl), x, v, TL, gTL, LTL, tau, eps)
+
+    def loss(fl):
+        r = _vm(point, 2)(fl, *args, 0.0, 0.0)
+        return jnp.mean(r * r)
+
+    vg = jax.jit(jax.value_and_grad(loss))
+    tc = time.perf_counter()
+    jax.block_until_ready(vg(flat0))
+    compile_s += time.perf_counter() - tc
+    if curve is None:
+        curve = [(0, 0.0, float('nan'), ev.rmae(p))]
+
+    def fg(x):
+        f, g = vg(jnp.asarray(x))
+        return float(f), np.asarray(g, dtype=np.float64)
+
+    st = dict(it=0, t=0.0, mark=time.perf_counter(), f=float('nan'))
+
+    def on_iter(x, f=None):
+        now = time.perf_counter()
+        st['t'] += now - st['mark']
+        st['it'] += 1
+        if f is not None:
+            st['f'] = float(f)
+        if st['it'] % log_every == 0:
+            curve.append((st['it'], t0 + st['t'], st['f'], ev.rmae(unravel(jnp.asarray(x)))))
+            if callback:
+                callback(curve)
+        st['mark'] = time.perf_counter()
+        if st['t'] > max_seconds:
+            raise StopIteration
+
+    if cfg.opt == 'ssbfgs':
+        x = ssbfgs(fg, np.asarray(flat0), on_iter, max_iters=max_iters)
+    else:
+        method = {'lbfgsb': 'L-BFGS-B', 'bfgs': 'BFGS'}[cfg.opt]
+        opts = dict(maxiter=max_iters, gtol=0.0)
+        if method == 'L-BFGS-B':
+            opts.update(maxcor=50, ftol=0.0, maxfun=10 * max_iters, maxls=50)
+        out = minimize(fg, np.asarray(flat0), jac=True, method=method, options=opts,
+                       callback=lambda intermediate_result: on_iter(intermediate_result.x, intermediate_result.fun))
+        x = out.x
+    st['t'] += time.perf_counter() - st['mark']
+    pf = unravel(jnp.asarray(x))
+    curve.append((st['it'], t0 + st['t'], float(fg(x)[0]), ev.rmae(pf)))
+    return pf, curve, compile_s
+
+
+def train(prob, cfg, seed=0, warmup=0, **kw):
+    """ Trains with cfg.opt; `warmup` > 0 runs that many Adam epochs first (for 'lm', 'lms' and quasi-Newton) """
+    if cfg.opt == 'adam':
+        return train_adam(prob, cfg, seed=seed, **kw)
+    if cfg.opt in ('lm', 'lms'):
+        if warmup:
+            p, curve, cs = train_adam(prob, cfg, seed=seed, epochs=warmup)
+            p, curve, cs2 = train_lm(prob, cfg, seed=seed, p0=p, curve0=curve, **kw)
+            return p, curve, cs + cs2
+        return train_lm(prob, cfg, seed=seed, **kw)
+    return train_qn(prob, cfg, seed=seed, warmup=warmup, **kw)
