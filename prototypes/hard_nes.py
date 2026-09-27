@@ -44,6 +44,7 @@ import time
 import numpy as np
 import jax
 import jax.numpy as jnp
+import jax.scipy.linalg
 from jax.flatten_util import ravel_pytree
 
 jax.config.update("jax_enable_x64", True)
@@ -55,9 +56,10 @@ _GL_T, _GL_W = 0.5 * (_GL_T + 1), 0.5 * _GL_W
 def straight_ray(vel, xs, x):
     """
         Straight-ray traveltime T_line = |d| int_0^1 s(xs + t d) dt (s = 1/v, d = x - xs) at x (N, dim), with its
-        gradient (N, dim) and laplacian (N,) w.r.t. x:
-            grad T_line = d/|d| I0 + |d| I1,   lap T_line = (dim - 1) I0 / |d| + 2 d/|d| . I1 + |d| I2,
-            I0 = int s, I1 = int t grad s, I2 = int t^2 lap s.
+        gradient (N, dim) and hessian (N, dim, dim) w.r.t. x:
+            grad T_line = d^ I0 + |d| I1,   hess T_line = (1 - d^ d^T) I0 / |d| + d^ I1^T + I1 d^T + |d| I2,
+            I0 = int s, I1 = int t grad s, I2 = int t^2 hess s,   hess s = -hess v / v^2 + 2 grad v grad v^T / v^3.
+        hess v is a central difference of `vel.gradient`.
     """
     d = x - xs
     dim = d.shape[-1]
@@ -66,20 +68,24 @@ def straight_ray(vel, xs, x):
     v = vel(P)
     gv = vel.gradient(P)
     h = 1e-5 * np.max(np.abs(np.concatenate([vel.xmin, vel.xmax])))
-    lap_v = sum((vel.gradient(P + h * e)[..., i] - vel.gradient(P - h * e)[..., i]) / (2 * h)
-                for i, e in enumerate(np.eye(dim)))
+    Hv = np.stack([(vel.gradient(P + h * e) - vel.gradient(P - h * e)) / (2 * h) for e in np.eye(dim)], axis=-1)
+    Hv = 0.5 * (Hv + np.swapaxes(Hv, -1, -2))
     s = 1.0 / v
     gs = -gv / (v * v)[..., None]
-    lap_s = -lap_v / v ** 2 + 2 * np.sum(gv * gv, axis=-1) / v ** 3
+    Hs = -Hv / (v ** 2)[..., None, None] + 2 * gv[..., :, None] * gv[..., None, :] / (v ** 3)[..., None, None]
     I0 = np.tensordot(_GL_W, s, axes=1)
     I1 = np.tensordot(_GL_W * _GL_T, gs, axes=1)
-    I2 = np.tensordot(_GL_W * _GL_T ** 2, lap_s, axes=1)
+    I2 = np.tensordot(_GL_W * _GL_T ** 2, Hs, axes=1)
     pos = R > 0
     safe = np.where(pos, R, 1.0)
+    dh = d / safe[:, None]
     TL = R * I0
-    gTL = np.where(pos[:, None], d / safe[:, None] * I0[:, None] + R[:, None] * I1, 0.0)
-    LTL = np.where(pos, (dim - 1) * I0 / safe + 2 * np.sum(d / safe[:, None] * I1, axis=-1) + R * I2, 0.0)
-    return TL, gTL, LTL
+    gTL = np.where(pos[:, None], dh * I0[:, None] + R[:, None] * I1, 0.0)
+    eye = np.eye(dim)[None]
+    HTL = ((eye - dh[:, :, None] * dh[:, None, :]) * (I0 / safe)[:, None, None]
+           + dh[:, :, None] * I1[:, None, :] + I1[:, :, None] * dh[:, None, :] + R[:, None, None] * I2)
+    HTL = np.where(pos[:, None, None], HTL, 0.0)
+    return TL, gTL, HTL
 
 
 class Problem:
@@ -106,9 +112,9 @@ class Problem:
         self.t_scale = float(np.median(np.asarray(self.train['TL'])))
 
     def features(self, x):
-        TL, gTL, LTL = straight_ray(self.vel, self.xs, x)
+        TL, gTL, HTL = straight_ray(self.vel, self.xs, x)
         return dict(x=jnp.asarray(x), v=jnp.asarray(self.vel(x)), TL=jnp.asarray(TL), gTL=jnp.asarray(gTL),
-                    LTL=jnp.asarray(LTL))
+                    HTL=jnp.asarray(HTL))
 
 
 class Config:
@@ -177,11 +183,11 @@ def trunk(p, f):
 
 
 def make_model(prob, cfg):
-    """ traveltime(p, x, TL, gTL, LTL, tau) and residual(p, x, v, TL, gTL, LTL, tau, eps) for one point """
+    """ traveltime(p, x, TL, gTL, HTL, tau) and residual(p, x, v, TL, gTL, HTL, tau, eps) for one point """
     xs = jnp.asarray(prob.xs)
     smin, smax, scale = 1.0 / prob.vmax, 1.0 / prob.vmin, prob.scale
 
-    def traveltime(p, x, TL, gTL, LTL, tau):
+    def traveltime(p, x, TL, gTL, HTL, tau):
         d = x - xs
         R = jnp.sqrt(jnp.sum(d * d) + 1e-300)
         z = trunk(p, d * scale)
@@ -195,18 +201,18 @@ def make_model(prob, cfg):
                 q = (R * scale) ** 2 * (jnp.exp(z) if cfg.factor == 'fermat-exp' else jax.nn.softplus(z))
             D = q / (1.0 + q)
             dx = x - jax.lax.stop_gradient(x)                    # zero, but carries the derivatives of T_line:
-            tl = TL + jnp.dot(gTL, dx) + 0.25 * LTL * jnp.dot(dx, dx)   # value, gradient and laplacian (2D)
+            tl = TL + jnp.dot(gTL, dx) + 0.5 * dx @ HTL @ dx    # value, gradient and hessian
             Tk = tl - (tl - R * smin) * D
         if cfg.heads == 1:
             return Tk[0]
         t = jnp.where(tau > 0, tau, 1.0)                        # finite in both branches of the where
         return jnp.where(tau > 0, -t * jax.nn.logsumexp(-Tk / t), jnp.min(Tk))
 
-    def residual(p, x, v, TL, gTL, LTL, tau, eps):
-        g = jax.grad(traveltime, argnums=1)(p, x, TL, gTL, LTL, tau)
+    def residual(p, x, v, TL, gTL, HTL, tau, eps):
+        g = jax.grad(traveltime, argnums=1)(p, x, TL, gTL, HTL, tau)
         r = v * v * jnp.sum(g * g) - 1.0
         if cfg.visc:
-            H = jax.jacfwd(jax.grad(traveltime, argnums=1), argnums=1)(p, x, TL, gTL, LTL, tau)
+            H = jax.jacfwd(jax.grad(traveltime, argnums=1), argnums=1)(p, x, TL, gTL, HTL, tau)
             r = r - eps * v * v * jnp.trace(H)
         return 0.5 * r
 
@@ -235,8 +241,8 @@ class Evaluator:
         e = prob.eval
         T = jax.vmap(tt, in_axes=(None, 0, 0, 0, 0, None))
         G = jax.vmap(jax.grad(tt, argnums=1), in_axes=(None, 0, 0, 0, 0, None))
-        self._T = jax.jit(lambda p: T(p, e['x'], e['TL'], e['gTL'], e['LTL'], 0.0))
-        self._G = jax.jit(lambda p: G(p, e['x'], e['TL'], e['gTL'], e['LTL'], 0.0))
+        self._T = jax.jit(lambda p: T(p, e['x'], e['TL'], e['gTL'], e['HTL'], 0.0))
+        self._G = jax.jit(lambda p: G(p, e['x'], e['TL'], e['gTL'], e['HTL'], 0.0))
         self.ref = prob.T_ref.ravel()
 
     def rmae(self, p):
@@ -276,7 +282,7 @@ def train_adam(prob, cfg, seed=0, epochs=3000, lr=6e-3, decay=3e-4, n_batches=8,
     ev = Evaluator(prob, cfg)
 
     def loss_fn(p, idx, tau, eps):
-        r = res_b(p, data['x'][idx], data['v'][idx], data['TL'][idx], data['gTL'][idx], data['LTL'][idx], tau, eps)
+        r = res_b(p, data['x'][idx], data['v'][idx], data['TL'][idx], data['gTL'][idx], data['HTL'][idx], tau, eps)
         return jnp.mean(jnp.abs(r))
 
     grad_fn = jax.value_and_grad(loss_fn)
@@ -321,29 +327,32 @@ def train_adam(prob, cfg, seed=0, epochs=3000, lr=6e-3, decay=3e-4, n_batches=8,
 
 
 def train_lm(prob, cfg, seed=0, iters=200, lam0=1e-3, log_every=2, callback=None, max_seconds=600, w_eps=1e-3,
-             p0=None, curve0=None):
+             p0=None, curve0=None, sampler=None, resample_every=40, eig_max=1500):
     """
         Levenberg-Marquardt for the L1 loss mean |r| by iteratively reweighted least squares: each iteration
         minimizes |W (r + J d)|^2 + lam |d|^2 with W = diag(1 / sqrt(max(|r|, w_eps * mean|r|))), so |W r|^2 = sum |r|.
-        The normal matrix (J^T W^2 J, P x P) is eigendecomposed once per iteration, so a new lam costs a matvec.
+        The normal matrix (J^T W^2 J, P x P) is eigendecomposed once per iteration, so a new lam costs a matvec;
+        above `eig_max` parameters it is Cholesky-factorized for each lam instead (about 25x cheaper per factorization).
         A step is kept when it lowers sum |r|; lam falls by 3 on success and grows 2x, 4x, ... on failure.
+        `sampler(params)` (see Resampler) replaces the collocation set every `resample_every` iterations.
     """
     scaled = cfg.opt == 'lms'
     p = init_params(jax.random.PRNGKey(seed), cfg, prob) if p0 is None else p0
     flat, unravel = ravel_pytree(p)
+    eig = flat.size <= eig_max
     _, res = make_model(prob, cfg)
     data = prob.train
     N = data['x'].shape[0]
     ev = Evaluator(prob, cfg)
-    args = (data['x'], data['v'], data['TL'], data['gTL'], data['LTL'])
+    args = (data['x'], data['v'], data['TL'], data['gTL'], data['HTL'])
 
-    def point(fl, x, v, TL, gTL, LTL, tau, eps):
-        return res(unravel(fl), x, v, TL, gTL, LTL, tau, eps)
+    def point(fl, x, v, TL, gTL, HTL, tau, eps):
+        return res(unravel(fl), x, v, TL, gTL, HTL, tau, eps)
 
-    rvec = jax.jit(lambda fl, tau, eps: _vm(point, 2)(fl, *args, tau, eps))
+    rvec = jax.jit(lambda fl, args, tau, eps: _vm(point, 2)(fl, *args, tau, eps))
 
     @jax.jit
-    def linearize(fl, tau, eps):
+    def linearize(fl, args, tau, eps):
         r = _vm(point, 2)(fl, *args, tau, eps)
         J = _vm(jax.grad(point), 2)(fl, *args, tau, eps)
         w = 1.0 / jnp.sqrt(jnp.maximum(jnp.abs(r), w_eps * jnp.mean(jnp.abs(r))))
@@ -351,17 +360,23 @@ def train_lm(prob, cfg, seed=0, iters=200, lam0=1e-3, log_every=2, callback=None
         col = jnp.sqrt(jnp.sum(Jw * Jw, axis=0)) if scaled else jnp.ones(Jw.shape[1])
         col = jnp.maximum(col, 1e-12 * jnp.max(col))
         Js = Jw / col                                           # Marquardt scaling: unit columns
-        S2, V = jnp.linalg.eigh(Js.T @ Js)
-        return V.T @ (Js.T @ (w * r)), jnp.maximum(S2, 0.0), V, jnp.sum(jnp.abs(r)), col
+        A, g = Js.T @ Js, Js.T @ (w * r)
+        if eig:
+            S2, V = jnp.linalg.eigh(A)
+            return V.T @ g, jnp.maximum(S2, 0.0), V, jnp.sum(jnp.abs(r)), col
+        return g, jnp.trace(A)[None], A, jnp.sum(jnp.abs(r)), col   # trace bounds the largest eigenvalue
 
     @jax.jit
     def step_of(gv, S2, V, lam, col):
-        return -(V @ (gv / (S2 + lam))) / col
+        if eig:
+            return -(V @ (gv / (S2 + lam))) / col
+        c = jax.scipy.linalg.cho_factor(V + lam * jnp.eye(V.shape[0]))   # V is the normal matrix here
+        return -jax.scipy.linalg.cho_solve(c, gv) / col
 
     tc = time.perf_counter()
-    gv, S2, V, f, col = linearize(flat, 1.0, 0.0)
+    gv, S2, V, f, col = linearize(flat, args, 1.0, 0.0)
     jax.block_until_ready(step_of(gv, S2, V, 1.0, col))
-    jax.block_until_ready(rvec(flat, 1.0, 0.0))
+    jax.block_until_ready(rvec(flat, args, 1.0, 0.0))
     compile_s = time.perf_counter() - tc
 
     lam = None
@@ -370,13 +385,16 @@ def train_lm(prob, cfg, seed=0, iters=200, lam0=1e-3, log_every=2, callback=None
     for it in range(1, iters + 1):
         tau, eps = schedule(prob, cfg, it / iters, stop_tau=0.75, stop_eps=0.7)
         ts = time.perf_counter()
-        gv, S2, V, f, col = linearize(flat, tau, eps)
+        if sampler is not None and it > 1 and (it - 1) % resample_every == 0:
+            d = sampler(unravel(flat))
+            args = (d['x'], d['v'], d['TL'], d['gTL'], d['HTL'])
+        gv, S2, V, f, col = linearize(flat, args, tau, eps)
         if lam is None:
             lam = lam0 * float(S2[-1])
         f, accepted, nu = float(f), False, 2.0
         for _ in range(16):
             new = flat + step_of(gv, S2, V, lam, col)
-            f_new = float(jnp.sum(jnp.abs(rvec(new, tau, eps))))
+            f_new = float(jnp.sum(jnp.abs(rvec(new, args, tau, eps))))
             if np.isfinite(f_new) and f_new < f:
                 flat, lam, accepted = new, lam / 3.0, True
                 break
@@ -462,11 +480,11 @@ def train_qn(prob, cfg, seed=0, max_seconds=90, log_every=25, warmup=0, max_iter
     flat0, unravel = ravel_pytree(p)
     _, res = make_model(prob, cfg)
     data = prob.train
-    args = (data['x'], data['v'], data['TL'], data['gTL'], data['LTL'])
+    args = (data['x'], data['v'], data['TL'], data['gTL'], data['HTL'])
     ev = Evaluator(prob, cfg)
 
-    def point(fl, x, v, TL, gTL, LTL, tau, eps):
-        return res(unravel(fl), x, v, TL, gTL, LTL, tau, eps)
+    def point(fl, x, v, TL, gTL, HTL, tau, eps):
+        return res(unravel(fl), x, v, TL, gTL, HTL, tau, eps)
 
     def loss(fl):
         r = _vm(point, 2)(fl, *args, 0.0, 0.0)
@@ -513,6 +531,85 @@ def train_qn(prob, cfg, seed=0, max_seconds=90, log_every=25, warmup=0, max_iter
     pf = unravel(jnp.asarray(x))
     curve.append((st['it'], t0 + st['t'], float(fg(x)[0]), ev.rmae(pf)))
     return pf, curve, compile_s
+
+
+
+class Resampler:
+    """
+        New collocation sets for `train_lm(sampler=...)`, drawn from a fixed pool of uniform candidates:
+            'uniform'  : a fresh uniform set
+            'rad'      : density ~ |r| / mean|r| + c (residual-based adaptive distribution, Wu et al. 2023)
+            'rad-curv' : the same, but points where the smallest hessian eigenvalue times R is below -kappa (caustic
+                         smoothing zones: first arrivals are semiconcave, their smooth fits bend down sharply there)
+                         keep only the uniform part c
+            'dwr'      : density ~ |r| A / mean(|r| A) + c, A = number of the network's descent paths (backward rays)
+                         through the point: a residual matters for every receiver downstream of it along the rays,
+                         and caustic crests have none (dual-weighted residual, the adjoint of the linearized eikonal
+                         is transport along rays)
+    """
+    def __init__(self, prob, cfg, kind, seed=0, pool=40000, n=None, c=1.0, kappa=5.0, n_acc=81, n_paths=8000):
+        self.prob, self.kind, self.c, self.kappa, self.n_acc, self.n_paths = prob, kind, c, kappa, n_acc, n_paths
+        self.rng = np.random.default_rng(seed + 12345)
+        xp = self.rng.uniform(prob.xmin, prob.xmax, size=(pool, 2))
+        xp = xp[np.abs(xp - prob.xs).sum(-1) > 1e-5]
+        self.pool = prob.features(xp)
+        self.xp = xp
+        self.n = n or int(prob.train['x'].shape[0])
+        tt, res = make_model(prob, cfg)
+        pl = self.pool
+        self._r = jax.jit(lambda p: jax.vmap(res, in_axes=(None, 0, 0, 0, 0, 0, None, None))(
+            p, pl['x'], pl['v'], pl['TL'], pl['gTL'], pl['HTL'], 0.0, 0.0))
+        if kind == 'rad-curv':
+            self._h = jax.jit(lambda p: jax.vmap(jax.hessian(tt, argnums=1), in_axes=(None, 0, 0, 0, 0, None))(
+                p, pl['x'], pl['TL'], pl['gTL'], pl['HTL'], 0.0))
+        if kind == 'dwr':
+            e = prob.eval
+            self._g = jax.jit(lambda p: jax.vmap(jax.grad(tt, argnums=1), in_axes=(None, 0, 0, 0, 0, None))(
+                p, e['x'], e['TL'], e['gTL'], e['HTL'], 0.0))
+
+    def flow_accumulation(self, params):
+        """ Visits of descent paths of the network, started from n_paths pool points, per cell of an n_acc^2 grid,
+            scaled to paths from every pool point """
+        from scipy.ndimage import map_coordinates
+        prob = self.prob
+        n = prob.X.shape[0]
+        G = np.asarray(self._g(params)).reshape(n, n, 2)
+        lo, hi = prob.xmin, prob.xmax
+        cell = (hi - lo) / (self.n_acc - 1)
+        ds = 0.5 * cell.min()
+        x = self.xp[:self.n_paths].copy()                      # the pool is already uniform random
+        alive = np.ones(len(x), bool)
+        acc = np.zeros((self.n_acc, self.n_acc))
+        for _ in range(int(2 * np.linalg.norm(hi - lo) / ds)):
+            if not alive.any():
+                break
+            fi = ((x[alive] - lo) / (hi - lo) * (n - 1)).T
+            g = np.stack([map_coordinates(G[..., k], fi, order=1, mode='nearest') for k in range(2)], -1)
+            x[alive] -= ds * g / np.maximum(np.linalg.norm(g, axis=-1, keepdims=True), 1e-12)
+            x = np.clip(x, lo, hi)
+            idx = np.clip(np.round((x[alive] - lo) / cell).astype(int), 0, self.n_acc - 1)
+            np.add.at(acc, (idx[:, 0], idx[:, 1]), 1.0)
+            alive[alive] = np.linalg.norm(x[alive] - prob.xs, axis=-1) > 2 * ds
+        return acc * len(self.xp) / len(x)
+
+    def __call__(self, params):
+        if self.kind == 'uniform':
+            w = np.ones(len(self.xp))
+        else:
+            r = np.abs(np.asarray(self._r(params)))
+            if self.kind == 'dwr':
+                acc = self.flow_accumulation(params)
+                lo, hi = self.prob.xmin, self.prob.xmax
+                idx = np.clip(np.round((self.xp - lo) / ((hi - lo) / (self.n_acc - 1))).astype(int), 0, self.n_acc - 1)
+                r = r * (1.0 + acc[idx[:, 0], idx[:, 1]])
+            w = r / max(r.mean(), 1e-300) + self.c
+            if self.kind == 'rad-curv':
+                Hs = np.asarray(self._h(params))
+                lam_min = np.linalg.eigvalsh(Hs)[:, 0]
+                R = np.linalg.norm(self.xp - self.prob.xs, axis=-1)
+                w = np.where(lam_min * R < -self.kappa, self.c, w)
+        idx = self.rng.choice(len(self.xp), size=self.n, replace=False, p=w / w.sum())
+        return {k: v[idx] for k, v in self.pool.items()}
 
 
 def train(prob, cfg, seed=0, warmup=0, **kw):
