@@ -215,6 +215,8 @@ def tune(velocity, solver='TP', xs=None, n_trials=50, epochs=300, timeout=None, 
     op = solver == 'OP'
     if op and xs is None:
         raise ValueError("NES-OP needs the source location `xs`")
+    if not verbose:                                  # before create_study, which logs at INFO
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
     if study is None:
         study = optuna.create_study(directions=['minimize', 'minimize'],
                                     sampler=optuna.samplers.TPESampler(seed=seed), **study_kwargs)
@@ -246,8 +248,6 @@ def tune(velocity, solver='TP', xs=None, n_trials=50, epochs=300, timeout=None, 
             raise optuna.TrialPruned('diverged')
         return loss, float(flops)
 
-    if not verbose:
-        optuna.logging.set_verbosity(optuna.logging.WARNING)
     study.optimize(objective, n_trials=n_trials, timeout=timeout)
     return study
 
