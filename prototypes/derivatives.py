@@ -86,6 +86,40 @@ def fmm_derivatives(name, n, order=2):
     return dict(n=n, h=float(h), values=n * n, seconds=seconds, errors=err)
 
 
+def fmm_factored_derivatives(name, n):
+    """
+        Fair baseline for the factored NES: FMM returns T = R tau, so differentiate tau by central differences and
+        R = |x - xs| exactly: grad T = tau grad R + R grad tau, hess T = tau hess R + grad R grad tau^T
+        + grad tau grad R^T + R hess tau, with grad R = d/R and hess R = (I - d d^T / R^2) / R.
+    """
+    import eikonalfm
+    title, vel, xs, _, _ = P.MODELS[name]
+    xs = np.asarray(xs, float)
+    axes, X = P.grid(vel, n)
+    h = axes[0][1] - axes[0][0]
+    idx = tuple(int(round((c - a[0]) / h)) for c, a in zip(xs, axes))
+    t0 = time.perf_counter()
+    tau = eikonalfm.factored_fast_marching(vel(X), idx, (h, h), 2)
+    seconds = time.perf_counter() - t0
+    tx, tz = np.gradient(tau, h, edge_order=2)
+    txx, txz = np.gradient(tx, h, edge_order=2)
+    tzx, tzz = np.gradient(tz, h, edge_order=2)
+    gt = np.stack([tx, tz], -1).reshape(-1, 2)
+    ht = np.stack([np.stack([txx, 0.5 * (txz + tzx)], -1), np.stack([0.5 * (txz + tzx), tzz], -1)], -2).reshape(-1, 2, 2)
+    tau = tau.reshape(-1)
+    d = X.reshape(-1, 2) - xs
+    R = np.linalg.norm(d, axis=-1)
+    ok = R > 0
+    d, R, tau, gt, ht = d[ok], R[ok], tau[ok], gt[ok], ht[ok]
+    gR = d / R[:, None]
+    hR = (np.eye(2) - gR[:, :, None] * gR[:, None, :]) / R[:, None, None]
+    T = R * tau
+    G = tau[:, None] * gR + R[:, None] * gt
+    Hs = tau[:, None, None] * hR + gR[:, :, None] * gt[:, None, :] + gt[:, :, None] * gR[:, None, :] + R[:, None, None] * ht
+    Te, Ge, He = exact_fields(name, X.reshape(-1, 2)[ok])
+    return dict(n=n, h=float(h), values=n * n, seconds=seconds, errors=errors(T, G, Hs, Te, Ge, He, R))
+
+
 def nes_derivatives(prob, cfg, params):
     """ Derivatives of a trained NES by automatic differentiation, on the problem's evaluation grid """
     tt, _ = H.make_model(prob, cfg)

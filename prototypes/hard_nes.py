@@ -118,17 +118,18 @@ class Problem:
 
 
 class Config:
-    def __init__(self, factor='nes', heads=1, opt='adam', init='he', visc=False, nl=3, nu=16):
+    def __init__(self, factor='nes', heads=1, opt='adam', init='he', visc=False, nl=3, nu=16, act='gauss'):
         self.factor, self.heads, self.opt, self.init, self.visc = factor, heads, opt, init, visc
-        self.nl, self.nu = nl, nu
+        self.nl, self.nu, self.act = nl, nu, act
 
     @property
     def id(self):
-        return f"{self.factor}-K{self.heads}-{self.opt}-{self.init}{'-visc' if self.visc else ''}-{self.nl}x{self.nu}"
+        return (f"{self.factor}-K{self.heads}-{self.opt}-{self.init}{'-visc' if self.visc else ''}-{self.nl}x{self.nu}"
+                + ('' if self.act == 'gauss' else f'-{self.act}'))
 
     def as_dict(self):
         return dict(factor=self.factor, heads=self.heads, opt=self.opt, init=self.init, visc=self.visc,
-                    nl=self.nl, nu=self.nu, id=self.id)
+                    nl=self.nl, nu=self.nu, act=self.act, id=self.id)
 
 
 ###############################################################################
@@ -160,7 +161,8 @@ def init_params(key, cfg, prob):
         head = dict(W=0.1 * head['W'], b=jnp.full(cfg.heads, -5.0))
     return dict(h=[first(ks[0], cfg.nu)] + [dense(ks[i], cfg.nu, cfg.nu) for i in range(1, cfg.nl)],
                 u=first(ks[cfg.nl], cfg.nu), v=first(ks[cfg.nl + 1], cfg.nu), head=head,
-                a=jnp.ones(cfg.nl), au=jnp.ones(()), av=jnp.ones(()), aout=jnp.ones(()))
+                a=jnp.ones(cfg.nl), au=jnp.ones(()), av=jnp.ones(()), aout=jnp.ones(()),
+                **(dict(c1=jnp.zeros(cfg.nl + 2), c2=jnp.ones(cfg.nl + 2)) if cfg.act == 'cauchy' else {}))
 
 
 def count_params(p):
@@ -171,13 +173,24 @@ def _gauss(z, a):
     return jnp.exp(-(a * z) ** 2)
 
 
-def trunk(p, f):
+def _act(p, z, a, i, act):
+    """ Activation of group i (layers 0..nl-1, then U, V): gauss exp(-(az)^2), lorentz 1/(1+(az)^2) (a pole at
+        z = +-i/a), cauchy (c1 az + c2)/(1+(az)^2) (Li, Xia & Zhang 2024; starts equal to lorentz) """
+    if act == 'gauss':
+        return _gauss(z, a)
+    t = a * z
+    r = 1.0 / (1.0 + t * t)
+    return r if act == 'lorentz' else (p['c1'][i] * t + p['c2'][i]) * r
+
+
+def trunk(p, f, act='gauss'):
     """ NES `improved_mlp` network: features (dim,) -> logits (heads,) """
-    h = _gauss(f @ p['h'][0]['W'] + p['h'][0]['b'], p['a'][0])
-    U = _gauss(f @ p['u']['W'] + p['u']['b'], p['au'])
-    V = _gauss(f @ p['v']['W'] + p['v']['b'], p['av'])
-    for i in range(1, len(p['h'])):
-        h = _gauss(h @ p['h'][i]['W'] + p['h'][i]['b'], p['a'][i])
+    nl = len(p['h'])
+    h = _act(p, f @ p['h'][0]['W'] + p['h'][0]['b'], p['a'][0], 0, act)
+    U = _act(p, f @ p['u']['W'] + p['u']['b'], p['au'], nl, act)
+    V = _act(p, f @ p['v']['W'] + p['v']['b'], p['av'], nl + 1, act)
+    for i in range(1, nl):
+        h = _act(p, h @ p['h'][i]['W'] + p['h'][i]['b'], p['a'][i], i, act)
         h = (1.0 - h) * U + h * V
     return h @ p['head']['W'] + p['head']['b']
 
@@ -190,12 +203,12 @@ def make_model(prob, cfg):
     def traveltime(p, x, TL, gTL, HTL, tau):
         d = x - xs
         R = jnp.sqrt(jnp.sum(d * d) + 1e-300)
-        z = trunk(p, d * scale)
+        z = trunk(p, d * scale, cfg.act)
         if cfg.factor == 'nes':
             Tk = R * (smin + (smax - smin) * jax.nn.sigmoid(p['aout'] * z))
         else:
             if cfg.factor == 'fermat-sq':
-                u = z - trunk(p, jnp.zeros_like(d))
+                u = z - trunk(p, jnp.zeros_like(d), cfg.act)
                 q = u * u
             else:
                 q = (R * scale) ** 2 * (jnp.exp(z) if cfg.factor == 'fermat-exp' else jax.nn.softplus(z))

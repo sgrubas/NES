@@ -8,6 +8,11 @@ A. Derivatives: accuracy of T, grad T, lap T and hess T of NES (autodiff) agains
        FMM: grids 41^2 ... 961^2 (problems.FMM_SIZES), 2nd-order central differences.
 B. Collocation sampling on the caustic models and one smooth control: Fermat squared deficit, Levenberg-Marquardt
    90 s, collocation set replaced every 40 iterations by: none (fixed), uniform, rad, rad-curv, dwr (hard_nes.Resampler).
+E. Activation: gauss (NES), lorentz 1/(1+(az)^2), cauchy (c1 az + c2)/(1+(az)^2) at equal size (3x16), best factor
+   per model (fermat-sq with caustics, nes otherwise), gradual RAD sampling, LM 90 s, 2 seeds; derivative errors
+   on the closed-form models.
+D. Control for C: full uniform replacement every iteration and every 5 iterations (uniform-r1, uniform-r5): is it
+   gradualness or changing the points from the start that helps?
 C. The same, with gradual sets (1 % of the points get a Metropolis-Hastings move every iteration: uniform-g, rad-g,
    rad-curv-g) and rad-curv with the set frozen for the last quarter of the budget (rad-curv-f).
 
@@ -38,11 +43,16 @@ DERIV_FACTORS = ['nes', 'fermat-exp']
 SAMP_MODELS = [('GaussLow', 2), ('TwoGaussLow', 2), ('GaussHigh', 1)]
 SAMPLERS = ['none', 'uniform', 'rad', 'rad-curv', 'dwr']
 GRADUAL = ['uniform-g', 'rad-g', 'rad-curv-g', 'rad-curv-f']
+EARLY = ['uniform-r1', 'uniform-r5']
+ACTS = ['gauss', 'lorentz', 'cauchy']
+ACT_MODELS = ['GaussLow', 'TwoGaussLow', 'GaussHigh', 'HyperbolicLens', 'VerticalGradient']
+ACT_FACTOR = {'GaussLow': 'fermat-sq', 'TwoGaussLow': 'fermat-sq'}
 SAMP_LABEL = {'none': 'fixed collocation points', 'uniform': 'fresh uniform points', 'rad': 'residual-adaptive',
               'rad-curv': 'residual-adaptive, caustics masked', 'dwr': 'ray-weighted residual',
               'uniform-g': 'gradual uniform turnover', 'rad-g': 'gradual residual-adaptive',
               'rad-curv-g': 'gradual residual-adaptive, caustics masked',
-              'rad-curv-f': 'residual-adaptive, caustics masked, frozen for the last quarter'}
+              'rad-curv-f': 'residual-adaptive, caustics masked, frozen for the last quarter',
+              'uniform-r1': 'fresh uniform points every iteration', 'uniform-r5': 'fresh uniform points every 5 iterations'}
 
 
 def main():
@@ -58,6 +68,11 @@ def main():
         plan += [('B', m, dict(kind=k, seed=s)) for m, ns in SAMP_MODELS for s in range(ns) for k in SAMPLERS]
     if 'C' in args.parts:
         plan += [('B', m, dict(kind=k, seed=s)) for m, ns in SAMP_MODELS for s in range(ns) for k in GRADUAL]
+    if 'D' in args.parts:
+        plan += [('B', m, dict(kind=k, seed=s)) for m, ns in SAMP_MODELS for s in range(ns) for k in EARLY]
+    if 'E' in args.parts:
+        plan += [('E', m, dict(act=a, seed=s, factor=ACT_FACTOR.get(m, 'nes'))) for m in ACT_MODELS for s in (0, 1)
+                 for a in ACTS]
     if 'A' in args.parts:
         plan += [('A', m, dict(factor=f, nl=nl, nu=nu)) for m in DERIV_MODELS for f in DERIV_FACTORS for nl, nu in SIZES]
     total, done, t_start = len(plan), 0, time.time()
@@ -90,6 +105,8 @@ def main():
     def rid_of(part, name, spec):
         if part == 'A':
             return f"{name}__deriv-{spec['factor']}-{spec['nl']}x{spec['nu']}"
+        if part == 'E':
+            return f"{name}__act-{spec['act']}-s{spec['seed']}"
         return f"{name}__samp-{spec['kind']}-s{spec['seed']}"
 
     def is_done(rid):
@@ -109,6 +126,11 @@ def main():
             prob = problem(name, N_TRAIN(n_params))
             rid = rid_of(part, name, spec)
             label = f"{spec['factor']} factor, {spec['nl']}x{spec['nu']}, Levenberg-Marquardt"
+        elif part == 'E':
+            prob = problem(name)
+            cfg = H.Config(spec['factor'], 1, 'lm', init='ridge', act=spec['act'])
+            rid = rid_of(part, name, spec)
+            label = f"{spec['act']} activation, {spec['factor']} factor, gradual RAD, seed {spec['seed']}"
         else:
             prob = problem(name)
             cfg = H.Config('fermat-sq', 1, 'lm', init='ridge')
@@ -123,16 +145,25 @@ def main():
                 budget = BUDGET[spec['nl'], spec['nu']]
                 p, curve, cs = H.train(prob, cfg, seed=0, iters=100000, max_seconds=budget)
                 rec.update(budget=budget, deriv=D.nes_derivatives(prob, cfg, p))
+            elif part == 'E':
+                sampler = H.Resampler(prob, cfg, 'rad-g', seed=spec['seed'])
+                p, curve, cs = H.train(prob, cfg, seed=spec['seed'], iters=100000, max_seconds=90, sampler=sampler)
+                if P.MODELS[name][3]:
+                    rec['deriv'] = D.nes_derivatives(prob, cfg, p)
             else:
-                kind = spec['kind'][:-2] if spec['kind'].endswith('-f') else spec['kind']
+                kind, every = spec['kind'], 40
+                if kind.endswith('-f'):
+                    kind = kind[:-2]
+                elif '-r' in kind:
+                    kind, every = kind.split('-r')[0], int(kind.split('-r')[1])
                 sampler = None if kind == 'none' else H.Resampler(prob, cfg, kind, seed=spec['seed'])
                 p, curve, cs = H.train(prob, cfg, seed=spec['seed'], iters=100000, max_seconds=90,
-                                       sampler=sampler, resample_every=40,
+                                       sampler=sampler, resample_every=every,
                                        freeze_after=67.5 if spec['kind'].endswith('-f') else None)
                 if sampler is not None and sampler.gradual:
                     rec['accepted'] = sampler.accepted
             m = H.Evaluator(prob, cfg).full(p)
-            if part == 'B':
+            if part in ('B', 'E'):
                 figure(os.path.join(args.out, f'{rid}.png'), prob, cfg, m, title=label)
             rec.update(status='done', params=H.count_params(p), compile_s=round(cs, 2), train_s=round(curve[-1][1], 2),
                        steps=int(curve[-1][0]), **{k: m[k] for k in ('rmae', 'max_over', 'max_under', 'cert_over',
