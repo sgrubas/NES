@@ -55,8 +55,8 @@ T = Eik.Traveltime(X)
 * `reciprocity` of `NES_TP.build_model` can be `'output'` (default, as in the paper: network outputs averaged over the source-receiver swap), `'first_layer'` (first hidden layer averaged over the swap, the rest evaluated once) or `'invariant'` (single pass on swap-invariant features). The last two train 1.7-2.4x faster per epoch; for the same number of epochs `'output'` was the most accurate on the Luneburg lens. Compare them on your model with `benchmarks/reciprocity.py` or let `NES.hpo` choose.
 * `NES_TP.predict(x, ('T', 'Gs'))` returns several outputs from one pass.
 * Custom eikonal layers receive the gradient as one tensor `(N, dim)` instead of a list of `(N, 1)` tensors.
-* Analytic test models with closed-form two-point traveltimes: `NES.velocity.LuneburgLens` (local lens, low or high velocity) and `NES.velocity.MaxwellFishEye` (low-velocity fish-eye with a focal point, or its high-velocity hyperbolic twin).
-* Hyperparameter search for any velocity model: `NES.hpo` (Optuna >= 5, two objectives: loss and FLOPs, median stopping rule, PED-ANOVA importance). Tutorial: `notebooks/NES_HPO_Optuna.ipynb`.
+* Analytic test models with closed-form two-point traveltimes: `NES.velocity.LuneburgLens` (local lens, low or high velocity) and `NES.velocity.MaxwellFishEye` (low-velocity fish-eye with a focal point, or its high-velocity hyperbolic twin). See the [gallery](#2d-examples-on-analytic-models) below.
+* Hyperparameter search for any velocity model: `NES.hpo` (Optuna >= 5, two objectives: loss and FLOPs, median stopping rule, PED-ANOVA importance). Tutorial: `notebooks/NES_HPO_Optuna.ipynb`, with the wavefronts of the tuned solvers on the Luneburg lens and two Gaussian anomalies.
 * Tests: `KERAS_BACKEND=jax pytest tests`.
 
 # 2D examples of NES-OP
@@ -67,6 +67,19 @@ Isochrones of solutions. RMAE is shown above each figure. The NES solutions are 
 <img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_Flower_0.42.png" alt="0.42%" width="400"/> <img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_Boxes_0.28.png" alt="0.28%" width="400"/>
 
 <img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_Layered_0.33.png" alt="0.33%" width="400"/> <img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_LayeredBoxGauss_0.34.png" alt="0.34%" width="400"/>
+
+# 2D examples on analytic models
+NES-OP on the analytic velocity models of `NES.velocity`, all with the same network and training (3000 epochs, about a minute each on a laptop CPU). RMAE is shown above each figure. The NES solutions are *white dashed isochrones*. The *black isochrones* are the exact traveltimes wherever a closed form exists: in the whole domain for the vertical gradient, Maxwell's fish-eye and the hyperbolic lens, and inside the lens for the Luneburg lenses. Elsewhere (Gaussian anomalies, outside the Luneburg lenses) they are the 2nd-order factored FMM. Reproduce with `KERAS_BACKEND=jax python benchmarks/analytic_models.py`.
+
+<img src="NES/data/NES_OP_GaussLow.png" alt="Gaussian low-velocity anomaly, 0.01%" width="400"/> <img src="NES/data/NES_OP_GaussHigh.png" alt="Gaussian high-velocity anomaly, 0.003%" width="400"/>
+
+<img src="NES/data/NES_OP_LuneburgLow.png" alt="Luneburg lens, low velocity, 0.008%" width="400"/> <img src="NES/data/NES_OP_LuneburgHigh.png" alt="Luneburg lens, high velocity, 0.007%" width="400"/>
+
+<img src="NES/data/NES_OP_FishEye.png" alt="Maxwell's fish-eye, 0.01%" width="400"/> <img src="NES/data/NES_OP_HyperbolicLens.png" alt="Hyperbolic lens, 0.01%" width="400"/>
+
+<img src="NES/data/NES_OP_VerticalGradient.png" alt="Vertical gradient, 0.02%" width="400"/> <img src="NES/data/NES_OP_LuneburgRim.png" alt="Luneburg lens, source on the rim, 0.03%" width="400"/>
+
+The low-velocity Gaussian anomaly focuses the rays, so the wavefront behind it has a kink (caustic). A Luneburg lens turns a point source on its rim into a plane wave.
 
 # Citation
 If you find NES useful for your research, please cite our paper and this repo:
