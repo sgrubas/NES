@@ -1,9 +1,12 @@
 """
 Backend-agnostic building blocks (Keras 3, `keras.ops` only): activations and the traveltime network.
+`sin`, `tanh` and `arctan` come from NES.backend, which keeps float64 precision where `keras.ops` does not.
 """
 import numpy as np
 import keras
 from keras import ops
+
+from .backend import sin, tanh, arctan
 
 
 #######################################################################
@@ -15,18 +18,18 @@ def _sinc(z):
     # `where` evaluates both branches: guard the division so the unused branch cannot produce NaN gradients
     nonzero = ops.not_equal(z, 0)
     safe = ops.where(nonzero, z, ops.ones_like(z))
-    return ops.where(nonzero, ops.sin(safe) / safe, ops.ones_like(z))
+    return ops.where(nonzero, sin(safe) / safe, ops.ones_like(z))
 
 
 ACTS = {
-        'tanh': ops.tanh,
-        'atan': ops.arctan,
+        'tanh': tanh,
+        'atan': arctan,
         'sigmoid': ops.sigmoid,
         'softplus': ops.softplus,
         'relu': ops.relu,
         'exp': ops.exp,
         'elu': ops.elu,
-        'sin': ops.sin,
+        'sin': sin,
         'sinc': _sinc,
         'linear': lambda z: z,
         'abs_linear': ops.abs,
@@ -107,6 +110,18 @@ def resolve_reciprocity(reciprocity):
     return reciprocity
 
 
+def _distance(d):
+    """
+        |d| over the last axis (keepdims). Not `ops.norm`: Keras 3.15 computes it in float32 for float64 input
+        on JAX and PyTorch.
+        At d = 0 (the source) the value is 0 and the gradient is 0 on every backend: `where` guards the sqrt,
+        whose derivative is infinite at 0.
+    """
+    s = ops.sum(d * d, axis=-1, keepdims=True)
+    nonzero = ops.greater(s, 0)
+    return ops.where(nonzero, ops.sqrt(ops.where(nonzero, s, ops.ones_like(s))), ops.zeros_like(s))
+
+
 class TraveltimeNet(keras.Model):
     """
         Factored traveltime network.
@@ -132,7 +147,7 @@ class TraveltimeNet(keras.Model):
         super().__init__(name=name)
         self.dim = int(dim)
         self.two_point = xs is None
-        self.xs = None if self.two_point else np.asarray(xs, dtype='float32').reshape(1, self.dim)
+        self.xs = None if self.two_point else np.asarray(xs, dtype='float64').reshape(1, self.dim)
         self.reciprocity = resolve_reciprocity(reciprocity) if self.two_point else None
         self.scale = 1.0 / float(xscale) if input_scale else 1.0
         self.slow_min, self.slow_max = 1.0 / float(vmax), 1.0 / float(vmin)
@@ -224,7 +239,7 @@ class TraveltimeNet(keras.Model):
         if self.out_vscale:
             tau = self.slow_min + (self.slow_max - self.slow_min) * tau
         if self.factored:
-            tau = tau * ops.norm(d, axis=-1, keepdims=True)
+            tau = tau * _distance(d)
         return tau
 
     def flops(self):

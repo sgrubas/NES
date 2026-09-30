@@ -1,10 +1,10 @@
 """
-Derivatives of a network w.r.t. its *inputs*, for every Keras 3 backend.
+Derivatives of a network w.r.t. its *inputs*, and float64-safe elementwise functions, for every Keras 3 backend.
 
-Keras 3 has no backend-agnostic `ops.grad`, so this is the only module that touches
-JAX / TensorFlow / PyTorch directly. Everything else in NES uses `keras.ops`.
+Keras 3 has no backend-agnostic `ops.grad`, and some `keras.ops` lose float64 precision (see `sin` below),
+so this is the only module that touches JAX / TensorFlow / PyTorch directly. Everything else in NES uses `keras.ops`.
 
-All functions assume `f` is sample-wise: row `i` of `f(x)` depends only on row `i` of `x`.
+All derivative functions assume `f` is sample-wise: row `i` of `f(x)` depends only on row `i` of `x`.
 Then d(sum f)/dx is exactly the stack of per-sample gradients, obtained in one reverse pass.
 The returned derivatives stay differentiable, so they can enter a training loss
 (double backpropagation) or be differentiated again (Hessians).
@@ -67,3 +67,45 @@ def hessian_rows(f, x, rows):
         One nested reverse pass per row; intended for inference, not for training losses.
     """
     return ops.stack([grad(lambda z, i=i: grad(f, z)[:, i:i + 1], x) for i in rows], axis=1)
+
+
+# Keras 3.15 computes some ops in float32 even for float64 input, since `dtypes.result_type('float64', float)`
+# gives 'float32' on the JAX and PyTorch backends: on JAX sin, cos, tan, the hyperbolic functions and all their
+# inverses; on both var, norm, arctan2 and mean (which still returns float64). The elementwise functions NES needs
+# are therefore taken from the backend for float64 tensors, which keeps the precision. Other dtypes, and
+# symbolic `KerasTensor`s, go through `keras.ops` as before.
+
+def _native_jax(name):
+    import jax.numpy as jnp
+    return getattr(jnp, name)
+
+
+def _native_tensorflow(name):
+    import tensorflow as tf
+    return getattr(tf.math, {'arctan': 'atan'}.get(name, name))
+
+
+def _native_torch(name):
+    import torch
+    return getattr(torch, name)
+
+
+_NATIVE = {'jax': _native_jax, 'tensorflow': _native_tensorflow, 'torch': _native_torch}
+
+
+def _float64_safe(name):
+    keras_op, native = getattr(ops, name), _NATIVE[BACKEND](name)
+
+    def fn(x):
+        if not keras.backend.is_keras_tensor(x):
+            x = ops.convert_to_tensor(x)
+            if keras.backend.standardize_dtype(x.dtype) == 'float64':
+                return native(x)
+        return keras_op(x)
+
+    fn.__name__ = fn.__qualname__ = name
+    fn.__doc__ = f"`keras.ops.{name}` that keeps float64 precision"
+    return fn
+
+
+sin, tanh, arctan = (_float64_safe(name) for name in ('sin', 'tanh', 'arctan'))

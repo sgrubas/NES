@@ -1,4 +1,6 @@
 # Neural Eikonal Solver
+[![tests](https://github.com/sgrubas/NES/actions/workflows/tests.yml/badge.svg)](https://github.com/sgrubas/NES/actions/workflows/tests.yml)
+
 [**Neural Eikonal Solver (NES)**](https://github.com/sgrubas/NES) is framework for solving factored eikonal equation using physics-informed neural network, for details see our paper: [early arXiv version](https://arxiv.org/abs/2205.07989) and [published final version](https://doi.org/10.1016/j.jcp.2022.111789). **NES** can simulate traveltimes of seismic waves in complex inhomogeneous velocity models.
 
 ## Description
@@ -15,7 +17,7 @@ $$\Vert \nabla_r T(\textbf{x}_s, \textbf{x}_r) \Vert = \frac{1}{v(\textbf{x}_r)}
 
 $$\Vert \nabla_s T(\textbf{x}_s, \textbf{x}_r) \Vert = \frac{1}{v(\textbf{x}_s)}$$
 
-So far, NES outperforms all existing neural-network based solutions. Table shows average performance results on a smoothed part of Marmousi model (NES-OP vs. PINNeik and NES-TP vs. EikoNet). RMAE is relative mean-absolute error with respect to the reference solution (second-order factored Fast Marching Method). The tests were performed on GPU Tesla P100-PCIE.
+So far, NES outperforms all existing neural-network based solutions. Table shows average performance results on a smoothed part of Marmousi model (NES-OP vs. PINNeik and NES-TP vs. EikoNet). RMAE is relative mean-absolute error with respect to the reference solution (second-order factored Fast Marching Method). The tests were performed on GPU Tesla P100-PCIE with NES 0.2 (TensorFlow 2), as reported in the paper; they have not been re-measured for 0.3.
 
 |Solver   	|RMAE, %   	|Training time, sec   	|Network size   	|
 |---	|---	|---	|---	|
@@ -27,11 +29,24 @@ So far, NES outperforms all existing neural-network based solutions. Table shows
 For detailed comparisons see our colab notebooks [EikoNet](https://github.com/sgrubas/NES/blob/main/notebooks/EikoNet_NES-TP_Marmousi.ipynb) and [PINNeik](https://github.com/sgrubas/NES/blob/main/notebooks/PINNeik_NES-OP_Marmousi.ipynb).
 
 ## Installation
-```python
-pip install git+https://github.com/sgrubas/NES.git
+```bash
+pip install "NES[jax] @ git+https://github.com/sgrubas/NES.git"   # or NES[tensorflow], NES[torch]
 ```
-NES is built on [Keras 3](https://keras.io/keras_3/) and runs on the **JAX**, **TensorFlow** or **PyTorch** backend (install at least one; Google Colab has all three).
+NES is built on [Keras 3](https://keras.io/keras_3/) and runs on the **JAX**, **TensorFlow** or **PyTorch** backend (install at least one; Google Colab has all three). The extras `hpo` (Optuna) and `test` (pytest) are optional.
 Select the backend before importing NES, e.g. `os.environ["KERAS_BACKEND"] = "jax"` (default is `"tensorflow"`).
+
+### Double precision
+NES computes in float32 by default. For float64, set it before building any model:
+```python
+import os
+os.environ["KERAS_BACKEND"] = "jax"
+import jax
+jax.config.update("jax_enable_x64", True)   # JAX only
+import keras
+keras.config.set_floatx("float64")
+keras.config.set_dtype_policy("float64")    # Keras fixes the layer dtype policy when the first layer is built
+import NES
+```
 
 # Quick example
 ```python
@@ -51,12 +66,14 @@ T = Eik.Traveltime(X)
 ```
 
 ## Version 0.3 (Keras 3)
+Highlights below; all changes are in [CHANGELOG.md](CHANGELOG.md).
 * Same API as 0.2 (`NES_OP`, `NES_TP`, `build_model`, `train`, `Traveltime`, `GradientR`, ...). Models saved by 0.2 (TensorFlow/Keras 2) load with `NES_TP.load` / `NES_OP.load`.
 * `reciprocity` of `NES_TP.build_model` can be `'output'` (default, as in the paper: network outputs averaged over the source-receiver swap), `'first_layer'` (first hidden layer averaged over the swap, the rest evaluated once) or `'invariant'` (single pass on swap-invariant features). The last two train 1.7-2.4x faster per epoch; for the same number of epochs `'output'` was the most accurate on the Luneburg lens. Compare them on your model with `benchmarks/reciprocity.py` or let `NES.hpo` choose.
 * `NES_TP.predict(x, ('T', 'Gs'))` returns several outputs from one pass.
 * Custom eikonal layers receive the gradient as one tensor `(N, dim)` instead of a list of `(N, 1)` tensors.
 * Analytic test models with closed-form two-point traveltimes: `NES.velocity.LuneburgLens` (local lens, low or high velocity) and `NES.velocity.MaxwellFishEye` (low-velocity fish-eye with a focal point, or its high-velocity hyperbolic twin). See the [gallery](#2d-examples-on-analytic-models) below.
 * Hyperparameter search for any velocity model: `NES.hpo` (Optuna >= 5, two objectives: loss and FLOPs, median stopping rule, PED-ANOVA importance). Tutorial: `notebooks/NES_HPO_Optuna.ipynb`, with the wavefronts of the tuned solvers on the Luneburg lens and two Gaussian anomalies.
+* float64 mode keeps full precision on all backends (see [Double precision](#double-precision)).
 * Tests: `KERAS_BACKEND=jax pytest tests`.
 
 # 2D examples of NES-OP

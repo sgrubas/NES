@@ -196,12 +196,13 @@ class _NESBase:
         x = np.asarray(x)
         assert x.shape[-1] == self._n_in, "Dimensions do not coincide"
         X = x.reshape(-1, self._n_in)
-        inputs = {'x': X.astype('float32')}
+        dtype = 'float64' if keras.config.floatx() == 'float64' else 'float32'   # no rounding in float64 mode
+        inputs = {'x': X.astype(dtype)}
         for k in keys:
             if k[0] == 'E':
                 o = self._layout[k[1:]]
                 v = self.velocity(X[:, o:o + self.dim])
-                inputs['v' + k[1:]] = np.asarray(v, dtype='float32').reshape(-1, 1)
+                inputs['v' + k[1:]] = np.asarray(v, dtype=dtype).reshape(-1, 1)
         return inputs
 
     def _predict(self, x, out, **kwargs):

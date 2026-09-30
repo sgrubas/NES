@@ -12,7 +12,7 @@ import keras
 import NES
 from NES.velocity import VerticalGradient, LocAnomaly, Interpolator, MaxwellFishEye, LuneburgLens
 from NES.eikonalLayers import IsoEikonal
-from NES.layers import RECIPROCITY_MODES
+from NES.layers import RECIPROCITY_MODES, ACTS
 
 DATA = pathlib.Path(__file__).parent / 'data'
 RNG = np.random.default_rng(0)
@@ -170,6 +170,72 @@ def test_nes_learns_lens(kind):
     pairs = np.concatenate([RNG.uniform(-b / 2, b / 2, (4000, 2)), RNG.uniform(-b, b, (4000, 2))], -1)
     pairs = pairs[np.abs(pairs[:, 2:] - pairs[:, :2]).sum(-1) > 1e-2]
     assert rmae(tp.Traveltime(pairs), lens.time(pairs[:, 2:], pairs[:, :2])) < 0.03
+
+
+########################################################################
+#                             float64 mode
+########################################################################
+
+
+@pytest.fixture
+def float64():
+    """
+        Computes in float64 during the test. Besides floatx, the default dtype policy of layers has to be set:
+        Keras fixes it at the first layer ever built. JAX also needs 64-bit arrays enabled.
+    """
+    floatx, policy = keras.config.floatx(), keras.config.dtype_policy()
+    keras.config.set_floatx('float64')
+    keras.config.set_dtype_policy('float64')
+    if keras.backend.backend() == 'jax':
+        import jax
+        x64 = jax.config.jax_enable_x64
+        jax.config.update('jax_enable_x64', True)
+    yield
+    keras.config.set_floatx(floatx)
+    keras.config.set_dtype_policy(policy)
+    if keras.backend.backend() == 'jax':
+        jax.config.update('jax_enable_x64', x64)
+
+
+def test_float64_homogeneous(float64):
+    """
+        vmin = vmax gives T = R / v whatever the network. Any float32 step on the way (Keras 3.15 `ops.norm`
+        for R, the inputs, the source position) would limit the error to ~1e-7.
+    """
+    hom = VerticalGradient(v0=3.0, a=0.0, xmin=[0., 0.], xmax=[1., 1.])
+    xs = np.array([0.3, 0.2])                           # not representable in float32
+    xr = RNG.uniform(0, 1, (8, 2))
+    R = np.linalg.norm(xr - xs, axis=-1)
+
+    op = NES.NES_OP(xs, hom)
+    op.build_model(nl=2, nu=8, act='tanh')
+    T, G = op.predict(xr, ('T', 'G'))
+    assert T.dtype == np.float64
+    assert np.abs(3 * T / R - 1).max() < 1e-14
+    assert np.abs(3 * G - (xr - xs) / R[:, None]).max() < 1e-14
+
+    tp = NES.NES_TP(hom)
+    tp.build_model(nl=2, nu=8, reciprocity='first_layer')
+    T = tp.Traveltime(np.concatenate([np.tile(xs, (len(xr), 1)), xr], axis=-1))
+    assert np.abs(3 * T / R - 1).max() < 1e-14
+
+
+@pytest.mark.parametrize('act', ['tanh', 'atan', 'sin', 'sinc'])
+def test_float64_activations(float64, act):
+    z = RNG.uniform(-2, 2, 64)
+    ref = {'tanh': np.tanh, 'atan': np.arctan, 'sin': np.sin, 'sinc': lambda z: np.sin(z) / z}[act]
+    out = keras.ops.convert_to_numpy(ACTS[act](keras.ops.convert_to_tensor(z)))
+    assert out.dtype == np.float64
+    assert np.abs(out - ref(z)).max() < 1e-14
+
+
+def test_finite_at_source(vel):
+    """ T = 0 and zero (sub)gradient at the source, where R = |xr - xs| is not differentiable """
+    keras.utils.set_random_seed(8)
+    nes = NES.NES_OP(xs=[0.3, 0.2], velocity=vel)
+    nes.build_model(nl=2, nu=8)
+    T, G = nes.predict(nes.xs, ('T', 'G'))
+    assert T == 0 and np.array_equal(G, [0, 0])
 
 
 ########################################################################
