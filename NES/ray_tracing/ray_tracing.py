@@ -1,6 +1,8 @@
 import numpy as np
 from scipy.integrate import solve_ivp
 
+_trapezoid = getattr(np, "trapezoid", None) or np.trapz  # np.trapz was removed in NumPy 2
+
 from .utils import nes_op_rts_right_part, nintegrate_ode_system, directions_dict, velocities_list
 
 # Available solvers:
@@ -162,6 +164,6 @@ def nes_op_ray_amplitude(ray,
     start_ampl = np.sqrt(start_vel) / np.sqrt(np.sum((nes_op.xs - ray[0]) ** 2)) ** (dims - 1)
 
     # Ray amplitude in the receiver:
-    amplitude = start_ampl * np.exp(- 1 / 2 * np.trapz(ray_vels ** 2 * laplacians, ray_times))
+    amplitude = start_ampl * np.exp(- 1 / 2 * _trapezoid(ray_vels ** 2 * laplacians, ray_times))
 
     return amplitude

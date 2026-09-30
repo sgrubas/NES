@@ -6,10 +6,12 @@ bin-release/
 
 # Other files and folders
 .settings/
-/NES/__pycache__/
+__pycache__/
 NES.egg-info/
 /notebooks/.ipynb_checkpoints
-/tests
+/tests/*
+!/tests/test_*.py
+!/tests/data/
 
 # Executables
 *.swf

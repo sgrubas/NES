@@ -1,39 +1,43 @@
-from tensorflow import norm, pow, ones_like, concat
-from tensorflow.keras.layers import Layer
+import keras
+from keras import ops
 
 
-class IsoEikonal(Layer):
+class IsoEikonal(keras.layers.Layer):
     """
-        Isotropic eikonal equation
+        Isotropic eikonal equation residual.
 
         Arguments:
-            P : callable or int or float : function for 'right hand side' and 'left hand side' of the equation. 
-            If 'int' or 'float', the exponentiation is applied. By default P=2.
-            hamiltonian : boolean : whether to use hamiltonian form of the equation 'H = P(v * |grad tau|) - P(1)'. By default is True
+            p : int or float : power of both sides of the equation, by default p=2
+            hamiltonian : boolean : whether to use the hamiltonian form 'H = ((v * |grad T|)^p - 1) / p'.
+                          Otherwise '(|grad T|^p - v^-p) / p'. By default is True
+
+        Call:
+            dT : tensor (N, dim) (or list of (N, 1) tensors) : traveltime gradient
+            v : tensor (N, 1) : velocity
     """
     def __init__(self, p=2, hamiltonian=True, **kwargs):
         kwargs.setdefault('name', 'IsoEikonal')
-        super(IsoEikonal, self).__init__(**kwargs)
+        super().__init__(**kwargs)
+        if not isinstance(p, (float, int)) or p == 0:
+            raise ValueError("`p` must be a non-zero float or int")
+        self.p = p
         self.hamiltonian = hamiltonian
 
-        assert isinstance(p, (float, int)), " `p` must be float or int"
-        assert p != 0, "`p` must not be 0"
-        self.p = p
-
     def call(self, dT, v):
-        eik = norm(concat(dT, axis=-1), axis=-1, keepdims=True)
-
+        if isinstance(dT, (list, tuple)):
+            dT = ops.concatenate(dT, axis=-1)
+        s2 = ops.sum(dT * dT, axis=-1, keepdims=True)   # |grad T|^2, no sqrt: finite gradient at |grad T| = 0 for p=2
         if self.hamiltonian:
-            lhs = eik * v
-            rhs = ones_like(v)
+            lhs = s2 * v * v
+            rhs = 1.0
         else:
-            lhs = eik
-            rhs = 1 / v
-
-        eikp = pow(lhs, self.p) - pow(rhs, self.p)
-        return eikp / self.p
+            lhs = s2
+            rhs = ops.power(v, -self.p)
+        if self.p != 2:
+            lhs = ops.power(lhs, self.p / 2)
+        return (lhs - rhs) / self.p
 
     def get_config(self):
-        config = super(IsoEikonal, self).get_config()
+        config = super().get_config()
         config.update({"p": self.p, "hamiltonian": self.hamiltonian})
         return config
