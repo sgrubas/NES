@@ -88,13 +88,33 @@ Isochrones of solutions. RMAE is shown above each figure. The NES solutions are 
 # 2D examples on analytic models
 NES-OP on the analytic velocity models of `NES.velocity`, all with the same network and training (3000 epochs, about a minute each on a laptop CPU). RMAE is shown above each figure. The NES solutions are *white dashed isochrones*. The *black isochrones* are the exact traveltimes wherever a closed form exists: in the whole domain for the vertical gradient, Maxwell's fish-eye and the hyperbolic lens, and inside the lens for the Luneburg lenses. Elsewhere (Gaussian anomalies, outside the Luneburg lenses) they are the 2nd-order factored FMM. Reproduce with `KERAS_BACKEND=jax python benchmarks/analytic_models.py`.
 
+Below each pair, two rows made with the C++ port `nes_cpp` ([`NES/cpp`](NES/cpp)). Their networks are plain MLPs (`improved_mlp=False`, which `nes_cpp` supports) with the same training settings, so their isochrones are not those of the figures above them. The NES isochrones are evaluated by `nes_cpp.NesModel`, and the FMM parts of the reference by `nes_cpp.fmm`.
+- First row (*nes_cpp*): trained by Keras, exported, evaluated by `nes_cpp`. Reproduce with `KERAS_BACKEND=jax python NES/cpp/benchmarks/analytic_figures.py`.
+- Second row (*trained by nes_cpp*): trained by `nes_cpp` (`NesModel.train`) from the same initial weights, on training points drawn the same way. Reproduce with `KERAS_BACKEND=jax python NES/cpp/benchmarks/analytic_figures.py --trainer cpp`. Each training step computes what a Keras step computes, but the order of the points differs and rounding differences grow during training, so the two rows show different networks ([`NES/cpp/docs/NES_TRAINING.md`](NES/cpp/docs/NES_TRAINING.md)). In this row, the low-velocity Gaussian anomaly (shuffle seed 0) ended in a wrong solution with a kink through the anomaly. Over five shuffle seeds from the same start, one nes_cpp run ended like this (1.9 %) and the other four reached 0.017–0.036 %; Keras reached 0.027–0.049 % in float64 and 0.031–0.76 % in float32.
+
 <img src="NES/data/NES_OP_GaussLow.png" alt="Gaussian low-velocity anomaly, 0.01%" width="400"/> <img src="NES/data/NES_OP_GaussHigh.png" alt="Gaussian high-velocity anomaly, 0.003%" width="400"/>
+
+<img src="NES/cpp/docs/figures/NES_OP_GaussLow_cpp.png" alt="Gaussian low-velocity anomaly, nes_cpp, 0.033%" width="400"/> <img src="NES/cpp/docs/figures/NES_OP_GaussHigh_cpp.png" alt="Gaussian high-velocity anomaly, nes_cpp, 0.028%" width="400"/>
+
+<img src="NES/cpp/docs/figures/NES_OP_GaussLow_cpp_trained.png" alt="Gaussian low-velocity anomaly, trained by nes_cpp, 1.9%" width="400"/> <img src="NES/cpp/docs/figures/NES_OP_GaussHigh_cpp_trained.png" alt="Gaussian high-velocity anomaly, trained by nes_cpp, 0.017%" width="400"/>
 
 <img src="NES/data/NES_OP_LuneburgLow.png" alt="Luneburg lens, low velocity, 0.008%" width="400"/> <img src="NES/data/NES_OP_LuneburgHigh.png" alt="Luneburg lens, high velocity, 0.007%" width="400"/>
 
+<img src="NES/cpp/docs/figures/NES_OP_LuneburgLow_cpp.png" alt="Luneburg lens, low velocity, nes_cpp, 0.010%" width="400"/> <img src="NES/cpp/docs/figures/NES_OP_LuneburgHigh_cpp.png" alt="Luneburg lens, high velocity, nes_cpp, 0.0097%" width="400"/>
+
+<img src="NES/cpp/docs/figures/NES_OP_LuneburgLow_cpp_trained.png" alt="Luneburg lens, low velocity, trained by nes_cpp, 0.012%" width="400"/> <img src="NES/cpp/docs/figures/NES_OP_LuneburgHigh_cpp_trained.png" alt="Luneburg lens, high velocity, trained by nes_cpp, 0.0073%" width="400"/>
+
 <img src="NES/data/NES_OP_FishEye.png" alt="Maxwell's fish-eye, 0.01%" width="400"/> <img src="NES/data/NES_OP_HyperbolicLens.png" alt="Hyperbolic lens, 0.01%" width="400"/>
 
+<img src="NES/cpp/docs/figures/NES_OP_FishEye_cpp.png" alt="Maxwell's fish-eye, nes_cpp, 0.015%" width="400"/> <img src="NES/cpp/docs/figures/NES_OP_HyperbolicLens_cpp.png" alt="Hyperbolic lens, nes_cpp, 0.062%" width="400"/>
+
+<img src="NES/cpp/docs/figures/NES_OP_FishEye_cpp_trained.png" alt="Maxwell's fish-eye, trained by nes_cpp, 0.12%" width="400"/> <img src="NES/cpp/docs/figures/NES_OP_HyperbolicLens_cpp_trained.png" alt="Hyperbolic lens, trained by nes_cpp, 0.013%" width="400"/>
+
 <img src="NES/data/NES_OP_VerticalGradient.png" alt="Vertical gradient, 0.02%" width="400"/> <img src="NES/data/NES_OP_LuneburgRim.png" alt="Luneburg lens, source on the rim, 0.03%" width="400"/>
+
+<img src="NES/cpp/docs/figures/NES_OP_VerticalGradient_cpp.png" alt="Vertical gradient, nes_cpp, 0.042%" width="400"/> <img src="NES/cpp/docs/figures/NES_OP_LuneburgRim_cpp.png" alt="Luneburg lens, source on the rim, nes_cpp, 0.015%" width="400"/>
+
+<img src="NES/cpp/docs/figures/NES_OP_VerticalGradient_cpp_trained.png" alt="Vertical gradient, trained by nes_cpp, 0.053%" width="400"/> <img src="NES/cpp/docs/figures/NES_OP_LuneburgRim_cpp_trained.png" alt="Luneburg lens, source on the rim, trained by nes_cpp, 0.048%" width="400"/>
 
 The low-velocity Gaussian anomaly focuses the rays, so the wavefront behind it has a kink (caustic). A Luneburg lens turns a point source on its rim into a plane wave.
 

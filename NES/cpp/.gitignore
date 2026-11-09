@@ -1,0 +1,4 @@
+# Build folders: command line (build/, build-asan/, ...), CLion (cmake-build-*/); CLion settings
+build*/
+cmake-build-*/
+.idea/

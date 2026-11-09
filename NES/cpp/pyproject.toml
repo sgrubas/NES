@@ -1,0 +1,22 @@
+# Python package `nes-cpp`. pip builds the compiled module `nes_cpp` by running CMake
+# (CMakeLists.txt) through scikit-build-core.
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=2.13"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "nes-cpp"
+version = "0.1.0"
+description = "C++ eikonal kernels for NES: factored fast marching and NES inference"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Serafim Grubas", email = "serafimgrubas@gmail.com" }]
+requires-python = ">=3.10"
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.scikit-build]
+# Use the defaults of the scikit-build-core version listed in build-system.requires.
+minimum-version = "build-system.requires"

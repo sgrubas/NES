@@ -1,0 +1,5 @@
+# C++ formatting rules. CI checks them; CLion applies them on "Reformat Code".
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+PointerAlignment: Left
